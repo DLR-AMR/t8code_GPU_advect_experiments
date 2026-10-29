@@ -1,25 +1,57 @@
-# t8code_project
+# t8code_AMD_experiments
 
-A template repository for projects that link against t8code.
-The project is configured such that it will build as a new library.
-It includes testing with Googletest.
+A project using t8code build from the t8code_project template (https://github.com/dlr-amr/t8code_project).
 
-## Quick Start
 
-To set up a new project with your custom project name:
+## Build
 
-```bash
-./setup_project.sh your_project_name
-```
-
-or manually:
+After project setup, build with:
 
 ```bash
-cmake -P configure_project.cmake -DPROJECT_NAME_LOWER=your_project_name
+mkdir build && cd build
+cmake ..
+make
 ```
 
-After running the setup script:
-- All template files (.in) will be processed
-- The generated files will have your project name
-- You can then commit these as your project
+Dependencies (t8code and googletest) are automatically fetched from GitHub using CMake's FetchContent.
+No manual installation is required.
 
+We also recommend to use:
+
+```bash
+-DCMAKE_INSTALL_PREFIX=/path/to/install
+-DCMAKE_INSTALL_LIBDIR=/path/to/install
+```
+
+when you want to locally install this package.
+
+To install, simply call:
+
+```bash
+make install
+```
+
+## Folders and Files
+
+### CMakeLists.txt
+
+The basic CMake setting file.
+Note that src/ and test/ folders have their own additional CMake files.
+
+### t8code_AMD_experiments_main.cxx
+
+A main program to show how to use and link against t8code_AMD_experiments and how to set up t8code.
+
+### src/
+
+Contains the source and header files of the library.
+
+src/t8code_AMD_experiments_helloworld.cxx and .hxx define a very simple hello world function.
+
+### test/
+
+Contains tests.
+
+### cmake/
+
+Contains CMake configuration files for fetching thirdparty dependencies (t8code, googletest) using FetchContent.
