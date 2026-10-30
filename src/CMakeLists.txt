@@ -5,10 +5,13 @@
 
 # Create a library called "t8code_AMD_experiments" which includes the source files.
 # The extension is already found. Any number of sources could be listed here.
-add_library (t8code_AMD_experiments t8code_AMD_experiments_helloworld.cxx t8code_AMD_experiments_data.cxx t8code_AMD_experiments_data_main.cxx)
+add_library (t8code_AMD_experiments t8code_AMD_experiments_helloworld.cxx t8code_AMD_experiments_data.cxx)
 
 # Link library against t8code, p4est, sc
 target_link_libraries (t8code_AMD_experiments PRIVATE T8CODE::T8 )
+
+# Link against OpenMP and enable GPU offloading if available
+t8_amd_enable_openmp (t8code_AMD_experiments)
 
 # Make sure the compiler can find include files for our t8code_AMD_experiments library
 # when other libraries or executables link to t8code_AMD_experiments
