@@ -69,6 +69,15 @@ add_executable (t8code_GPU_experiments_data src/t8code_GPU_experiments_data_main
 target_link_libraries (t8code_GPU_experiments_data LINK_PUBLIC t8code_GPU_experiments T8CODE::T8)
 t8_GPU_enable_openmp (t8code_GPU_experiments_data)
 
+# Add executable called "t8code_GPU_experiments_advect", based on the advect example of t8code.
+# The example common code (flow fields, level-set functions) is compiled directly into the executable.
+add_executable (t8code_GPU_experiments_advect
+  src/advect/t8code_GPU_experiments_advect.cxx
+  src/advect/t8code_GPU_experiments_example_common.cxx
+  src/advect/t8code_GPU_experiments_example_common_functions.cxx)
+target_link_libraries (t8code_GPU_experiments_advect LINK_PUBLIC t8code_GPU_experiments T8CODE::T8)
+t8_GPU_enable_openmp (t8code_GPU_experiments_advect)
+
 # Recurse into the "test" subdirectory. This does not actually
 # cause another cmake executable to run. The same process will walk through
 # the project's entire directory structure.
