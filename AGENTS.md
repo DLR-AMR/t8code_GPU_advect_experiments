@@ -9,14 +9,15 @@ Guidance for coding agents working in this repository.
 and adds **OpenMP GPU offloading** (AMD `gfx*` or NVIDIA `sm_*`). It was generated from the
 [t8code_project](https://github.com/dlr-amr/t8code_project) template. 
 
-So far it holds only template scaffolding and a copy of t8code tutorial **step5**
-(element data plus ghost exchange). No GPU kernels exist yet. The offloading build setup is in place for them.
+So far it holds template scaffolding, a copy of t8code tutorial **step5** (element data plus ghost exchange),
+and a copy of t8code's **advect example** (`src/advect/`), which is the starting point for further development.
+No GPU kernels exist yet. The offloading build setup is in place for them.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `CMakeLists.txt` | Top-level build. Pulls in thirdparty and OpenMP, builds library (`src/`), two executables, tests. |
+| `CMakeLists.txt` | Top-level build. Pulls in thirdparty and OpenMP, builds library (`src/`), three executables, tests. |
 | `cmake/thirdparty.json` | Dependency list read by `thirdparty.cmake`. Currently only t8code, pinned to a commit hash. |
 | `cmake/thirdparty.cmake` | Parses the JSON and runs `FetchContent_Declare/MakeAvailable` for each `git` entry. `depends_on_cmake_option` skips an entry when that option is ON. |
 | `cmake/OpenMPOffload.cmake` | GPU detection and the helper `t8_GPU_enable_openmp(<target>)`. |
@@ -24,6 +25,8 @@ So far it holds only template scaffolding and a copy of t8code tutorial **step5*
 | `src/t8code_GPU_experiments_helloworld.{hxx,cxx}` | Template hello world in namespace `t8code_GPU_experiments`. |
 | `src/t8code_GPU_experiments_data.{hxx,cxx}` | t8code step5 example adapted for this project (`t8code_GPU_experiments_main`). |
 | `src/t8code_GPU_experiments_data_main.cxx` | `main()` wrapper for the data example. |
+| `src/advect/t8code_GPU_experiments_advect.cxx` | Copy of t8code `example/advect/t8_advection.cxx` (finite-volume advection solver with adaptive refinement, contains `main`). |
+| `src/advect/t8code_GPU_experiments_example_common*.{hxx,cxx}` | Copy of t8code `example/common/` (flow fields, level-set functions, adapt callbacks). |
 | `t8code_GPU_experiments_main.cxx` | `main()` for the hello world executable (MPI/sc/t8 init, then finalize). |
 | `test/` | GoogleTest tests plus shared `gtest_main` that initializes MPI/sc/t8code. |
 
@@ -34,6 +37,8 @@ So far it holds only template scaffolding and a copy of t8code tutorial **step5*
 - `t8code_GPU_experiments_data`: built from `src/t8code_GPU_experiments_data_main.cxx`. When run, it writes
   `t8code_GPU_experiments_forest*.vtu` and `t8code_GPU_experiments_forest_with_volume_data*.vtu`
   into the working directory.
+- `t8code_GPU_experiments_advect`: built from the files in `src/advect/`. It has the same command line as t8code's
+  `t8_advection` (`-h` for help). Example: `mpirun -np 2 ./t8code_GPU_experiments_advect -u 1 -e 4 -l 3 -r 1 -T 0.1 -o`.
 - Tests: `t8code_GPU_experiments_gtest_example`, `t8code_GPU_experiments_gtest_vtk_linkage`.
 
 ## Building
@@ -70,6 +75,10 @@ ctest            # each test runs as `mpirun -np 4 <exe>`
   GNU-ish formatting with a space before `(` in calls, `/* */` comments, and doxygen comments on declarations.
   Every program follows the order `sc_MPI_Init` → `sc_init` → `t8_init` … `sc_finalize` → `sc_MPI_Finalize`.
 - To bump t8code, change `ref` in `cmake/thirdparty.json`.
+- `src/advect/` was copied from t8code at commit `cda4653` (noted in each file). Everything the copy defines was renamed
+  from `t8_*` to `t8code_GPU_experiments_*` (prefixes `advect_`, `flow_`, `common_`, `scalar3d_`, `scalar_function_`,
+  `example_`, `levelset_`, `incomp_cube_`). To diff against upstream, map these prefixes back first.
+  Calls into the t8code API (`t8_forest_*`, `t8_cmesh_*`, `t8_vec*`, ...) keep their names.
 - PR titles start with `Documentation:`, `Bugfix:`, `Feature:`, `Improvement:` or `Other:` (see `pull_request_template.md`).
 - Commits, issues and PRs created by an AI agent must contain `[created with claude]`.
 
