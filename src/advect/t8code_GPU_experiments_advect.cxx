@@ -42,6 +42,7 @@
 
 #define MAX_FACES 8 /* The maximum number of faces of an element */
 /* TODO: This is not memory efficient. If we run out of memory, we can optimize here. */
+#define MAX_FACE_NEIGHBORS 4 /* The maximum number of face neighbors at one face in a 2:1 balanced forest */
 
 /* Enum for statistics. */
 typedef enum {
@@ -144,15 +145,18 @@ typedef struct
   t8_3D_vec midpoint;             /**< coordinates of element midpoint in R^3 */
   double vol;                     /**< Volume of this element */
   double phi_new;                 /**< Value of solution at midpoint in next time step */
-  double *fluxes[MAX_FACES];      /**< The fluxes to each neighbor at a given face */
-  int flux_valid[MAX_FACES];      /**< If > 0, this flux was computed, if 0 memory was allocated
-                                                   for this flux, but not computed. If < 0, no memory was allocated. */
-  int level;                      /**< The refinement level of the element. */
-  int num_faces;                  /**< The number of faces */
-  int num_neighbors[MAX_FACES];   /**< Number of neighbors for each face */
-  int *dual_faces[MAX_FACES];     /**< The face indices of the neighbor elements */
-  t8_locidx_t *neighs[MAX_FACES]; /**< Indices of the neighbor elements */
-  int8_t neigh_level[MAX_FACES];  /**< The level of the face neighbors at this face. */
+  double fluxes[MAX_FACES][MAX_FACE_NEIGHBORS];      /**< The fluxes to each neighbor at a given face.
+                                                          Only the first SC_MAX (1, num_neighbors) entries are used. */
+  int flux_valid[MAX_FACES];                         /**< If > 0, this flux was computed, if <= 0 it was not computed.
+                                                          -1 marks faces whose neighbors were not yet computed. */
+  int level;                                         /**< The refinement level of the element. */
+  int num_faces;                                     /**< The number of faces */
+  int num_neighbors[MAX_FACES];                      /**< Number of neighbors for each face */
+  int dual_faces[MAX_FACES][MAX_FACE_NEIGHBORS];     /**< The face indices of the neighbor elements.
+                                                          Only the first num_neighbors entries are used. */
+  t8_locidx_t neighs[MAX_FACES][MAX_FACE_NEIGHBORS]; /**< Indices of the neighbor elements.
+                                                          Only the first num_neighbors entries are used. */
+  int8_t neigh_level[MAX_FACES];                     /**< The level of the face neighbors at this face. */
 } t8code_GPU_experiments_advect_element_data_t;
 
 /* Return the phi value of a given local or ghost element.
@@ -457,11 +461,6 @@ t8code_GPU_experiments_advect_flux_upwind_hanging (const t8code_GPU_experiments_
     /* Set the flux of the neighbor element */
     dual_face = el_hang->dual_faces[face][i];
     if (!adapted_or_partitioned && !neigh_is_ghost) {
-
-      if (neigh_data->flux_valid[dual_face] < 0) {
-        /* We need to allocate the fluxes */
-        neigh_data->fluxes[dual_face] = T8_ALLOC (double, 1);
-      }
       SC_CHECK_ABORT (dual_face < neigh_data->num_faces, "num\n");
       // SC_CHECK_ABORT (neigh_data->num_neighbors[dual_face] == 1, "entry\n");
       neigh_data->num_neighbors[dual_face] = 1;
@@ -526,6 +525,39 @@ t8code_GPU_experiments_advect_compute_element_data (t8code_GPU_experiments_advec
   elem_data->vol = t8_forest_element_volume (problem->forest, ltreeid, element);
 }
 
+/* Compute the face neighbors of an element across face iface and store their
+ * indices, dual faces and level in the element data. */
+static void
+t8code_GPU_experiments_advect_compute_face_neighbors (const t8code_GPU_experiments_advect_problem_t *problem,
+                                                      t8code_GPU_experiments_advect_element_data_t *elem_data,
+                                                      const t8_element_t *element, const t8_locidx_t ltreeid,
+                                                      const int iface)
+{
+  const t8_scheme *scheme = t8_forest_get_scheme (problem->forest);
+  const t8_element_t **neighbors;
+  int *dual_faces;
+  t8_locidx_t *neigh_indices;
+  t8_eclass_t neigh_eclass;
+  int num_neighbors, ineigh;
+
+  /* This allocates neighbors, dual_faces and neigh_indices if num_neighbors > 0 */
+  t8_forest_leaf_face_neighbors (problem->forest, ltreeid, element, &neighbors, iface, &dual_faces, &num_neighbors,
+                                 &neigh_indices, &neigh_eclass);
+  SC_CHECK_ABORTF (num_neighbors <= MAX_FACE_NEIGHBORS, "Element has %i neighbors at face %i, at most %i are supported.\n",
+                   num_neighbors, iface, MAX_FACE_NEIGHBORS);
+  elem_data->num_neighbors[iface] = num_neighbors;
+  for (ineigh = 0; ineigh < num_neighbors; ineigh++) {
+    elem_data->neighs[iface][ineigh] = neigh_indices[ineigh];
+    elem_data->dual_faces[iface][ineigh] = dual_faces[ineigh];
+    elem_data->neigh_level[iface] = scheme->element_get_level (neigh_eclass, neighbors[ineigh]);
+  }
+  if (num_neighbors > 0) {
+    T8_FREE (neighbors);
+    T8_FREE (dual_faces);
+    T8_FREE (neigh_indices);
+  }
+}
+
 /* Replace callback to decide how to interpolate a refined or coarsened element.
  * If an element is refined, each child gets the phi value of its parent.
  * If elements are coarsened, the parent gets the average phi value of the children.
@@ -576,9 +608,6 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
     for (iface = 0; iface < elem_data_in->num_faces; iface++) {
       elem_data_in->num_neighbors[iface] = 0;
       elem_data_in->flux_valid[iface] = -1;
-      elem_data_in->dual_faces[iface] = NULL;
-      elem_data_in->fluxes[iface] = NULL;
-      elem_data_in->neighs[iface] = NULL;
     }
   }
   else if (refine == 1) {
@@ -604,9 +633,6 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
       for (iface = 0; iface < num_new_faces; iface++) {
         elem_data_in[i].num_neighbors[iface] = 0;
         elem_data_in[i].flux_valid[iface] = -1;
-        elem_data_in[i].dual_faces[iface] = NULL;
-        elem_data_in[i].fluxes[iface] = NULL;
-        elem_data_in[i].neighs[iface] = NULL;
       }
       /* Update the level */
       elem_data_in[i].level = elem_data_out->level + 1;
@@ -643,17 +669,15 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
     for (iface = 0; iface < elem_data_in->num_faces; iface++) {
       elem_data_in->num_neighbors[iface] = 0;
       elem_data_in->flux_valid[iface] = -1;
-      elem_data_in->dual_faces[iface] = NULL;
-      elem_data_in->fluxes[iface] = NULL;
-      elem_data_in->neighs[iface] = NULL;
     }
     /* update the level */
     elem_data_in->level = elem_data_out->level - 1;
   }
 }
 
+/* Invalidate the neighbor and flux information of all local elements */
 static void
-t8code_GPU_experiments_advect_problem_elements_destroy (t8code_GPU_experiments_advect_problem_t *problem)
+t8code_GPU_experiments_advect_problem_elements_invalidate (t8code_GPU_experiments_advect_problem_t *problem)
 {
 
   t8_locidx_t lelement, num_local_elem;
@@ -662,20 +686,14 @@ t8code_GPU_experiments_advect_problem_elements_destroy (t8code_GPU_experiments_a
 
   num_local_elem = t8_forest_get_local_num_leaf_elements (problem->forest);
   T8_ASSERT (num_local_elem <= (t8_locidx_t) problem->element_data->elem_count);
-  /* destroy all elements */
+  /* invalidate all elements */
   for (lelement = 0; lelement < num_local_elem; lelement++) {
     elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, lelement);
     for (iface = 0; iface < elem_data->num_faces; iface++) {
       /* TODO: make face number dim independent */
       if (elem_data->num_neighbors[iface] > 0) {
-        T8_FREE (elem_data->neighs[iface]);
-        T8_FREE (elem_data->dual_faces[iface]);
-        T8_FREE (elem_data->fluxes[iface]);
         elem_data->num_neighbors[iface] = 0;
         elem_data->flux_valid[iface] = -1;
-      }
-      else {
-        T8_FREE (elem_data->fluxes[iface]);
       }
     }
   }
@@ -750,7 +768,7 @@ t8code_GPU_experiments_advect_problem_adapt (t8code_GPU_experiments_advect_probl
     problem->stats[ADVECT_AMR].count = 1;
   }
   /* clean the old element data */
-  t8code_GPU_experiments_advect_problem_elements_destroy (problem);
+  t8code_GPU_experiments_advect_problem_elements_invalidate (problem);
   sc_array_destroy (problem->element_data);
   sc_array_destroy (problem->phi_values);
   /* Free memory for the forest */
@@ -828,7 +846,7 @@ t8code_GPU_experiments_advect_problem_partition (t8code_GPU_experiments_advect_p
   }
 
   /* destroy the old forest and the element data */
-  t8code_GPU_experiments_advect_problem_elements_destroy (problem);
+  t8code_GPU_experiments_advect_problem_elements_invalidate (problem);
   t8_forest_unref (&problem->forest);
   problem->forest = forest_partition;
   sc_array_destroy (problem->element_data);
@@ -997,11 +1015,9 @@ t8code_GPU_experiments_advect_problem_init_elements (t8code_GPU_experiments_adve
 {
   t8_locidx_t itree, ielement, idata;
   t8_locidx_t num_trees, num_elems_in_tree;
-  const t8_element_t **neighbors;
-  int iface, ineigh;
+  int iface;
   t8code_GPU_experiments_advect_element_data_t *elem_data;
   const t8_scheme *scheme = t8_forest_get_scheme (problem->forest);
-  t8_eclass_t neigh_eclass;
   double speed, max_speed = 0, min_diam = -1, delta_t, min_delta_t;
   t8_3D_vec u;
   double diam;
@@ -1045,22 +1061,7 @@ t8code_GPU_experiments_advect_problem_init_elements (t8code_GPU_experiments_adve
       elem_data->num_faces = scheme->element_get_num_faces (tree_class, element);
       for (iface = 0; iface < elem_data->num_faces; iface++) {
         /* Compute the indices of the face neighbors */
-
-        t8_forest_leaf_face_neighbors (problem->forest, itree, element, &neighbors, iface,
-                                       &elem_data->dual_faces[iface], &elem_data->num_neighbors[iface],
-                                       &elem_data->neighs[iface], &neigh_eclass);
-        for (ineigh = 0; ineigh < elem_data->num_neighbors[iface]; ineigh++) {
-          elem_data->neigh_level[iface] = scheme->element_get_level (neigh_eclass, neighbors[ineigh]);
-        }
-
-        if (elem_data->num_neighbors[iface] > 0) {
-          T8_FREE (neighbors);
-          //t8_global_essentialf("alloc face %i of elem %i\n", iface, ielement);
-          elem_data->fluxes[iface] = T8_ALLOC (double, elem_data->num_neighbors[iface]);
-        }
-        else {
-          elem_data->fluxes[iface] = T8_ALLOC (double, 1);
-        }
+        t8code_GPU_experiments_advect_compute_face_neighbors (problem, elem_data, element, itree, iface);
         elem_data->flux_valid[iface] = 0;
       }
     }
@@ -1175,8 +1176,8 @@ t8code_GPU_experiments_advect_problem_destroy (t8code_GPU_experiments_advect_pro
   if (problem == NULL) {
     return;
   }
-  /* destroy elements */
-  t8code_GPU_experiments_advect_problem_elements_destroy (problem);
+  /* invalidate elements */
+  t8code_GPU_experiments_advect_problem_elements_invalidate (problem);
   /* Free the element array */
   sc_array_destroy (problem->element_data);
   if (problem->element_data_adapt != NULL) {
@@ -1199,7 +1200,7 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
                  int no_vtk, int vtk_freq, double band_width, int dim, int dummy_op, int volume_refine)
 {
   t8code_GPU_experiments_advect_problem_t *problem;
-  int iface, ineigh;
+  int iface;
   t8_locidx_t itree, ielement, lelement;
   t8code_GPU_experiments_advect_element_data_t *elem_data, *neigh_data = NULL;
   double flux;
@@ -1209,8 +1210,6 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
   int done = 0;
   int adapted_or_partitioned = 0;
   int dual_face;
-  const t8_element_t **neighs;
-  t8_eclass_t neigh_eclass;
   double total_time, solve_time = 0;
   double ghost_exchange_time, ghost_waittime, neighbor_time, flux_time;
   double vtk_time = 0;
@@ -1225,7 +1224,6 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
   problem = t8code_GPU_experiments_advect_problem_init (cmesh, u, phi_0, ls_data, level, maxlevel, T, cfl, comm, band_width, dim, dummy_op,
                                     volume_refine);
   t8code_GPU_experiments_advect_problem_init_elements (problem);
-  const t8_scheme *scheme = t8_forest_get_scheme (problem->forest);
 
   if (maxlevel > level) {
     int ilevel;
@@ -1294,27 +1292,8 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
             if (adapted_or_partitioned) {
               /* We changed the mesh, so that we have to calculate the neighbor
                * indices again. */
-              if (elem_data->num_neighbors[iface] > 0) {
-                T8_FREE (elem_data->neighs[iface]);
-                T8_FREE (elem_data->dual_faces[iface]);
-                elem_data->flux_valid[iface] = -1;
-              }
-              T8_FREE (elem_data->fluxes[iface]);
               neighbor_time = -sc_MPI_Wtime ();
-              t8_forest_leaf_face_neighbors (problem->forest, itree, elem, &neighs, iface,
-                                             &elem_data->dual_faces[iface], &elem_data->num_neighbors[iface],
-                                             &elem_data->neighs[iface], &neigh_eclass);
-              for (ineigh = 0; ineigh < elem_data->num_neighbors[iface]; ineigh++) {
-                elem_data->neigh_level[iface] = scheme->element_get_level (neigh_eclass, neighs[ineigh]);
-              }
-
-              T8_ASSERT (neighs != NULL || elem_data->num_neighbors[iface] == 0);
-              if (neighs != NULL) {
-                T8_FREE (neighs);
-              }
-
-              /* Allocate flux storage */
-              elem_data->fluxes[iface] = T8_ALLOC (double, SC_MAX (1, elem_data->num_neighbors[iface]));
+              t8code_GPU_experiments_advect_compute_face_neighbors (problem, elem_data, elem, itree, iface);
               elem_data->flux_valid[iface] = 0;
 
               neighbor_time += sc_MPI_Wtime ();
@@ -1372,11 +1351,6 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
                 /* If this face is not hanging, we can set the
                  * flux of the neighbor element as well */
                 if (!adapted_or_partitioned && !neigh_is_ghost && !hanging) {
-                  if (neigh_data->flux_valid[dual_face] < 0) {
-                    neigh_data->fluxes[dual_face] = T8_ALLOC (double, 1);
-                    neigh_data->dual_faces[dual_face] = T8_ALLOC (int, 1);
-                    neigh_data->neighs[dual_face] = T8_ALLOC (t8_locidx_t, 1);
-                  }
                   SC_CHECK_ABORT (dual_face < neigh_data->num_faces, "num\n");
                   //         SC_CHECK_ABORT (neigh_data->num_neighbors[dual_face] == 1, "dual face\n");
                   neigh_data->fluxes[dual_face][0] = -flux;
