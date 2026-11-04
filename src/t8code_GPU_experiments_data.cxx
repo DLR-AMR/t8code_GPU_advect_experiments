@@ -22,26 +22,26 @@
 
 /* See also: https://github.com/DLR-AMR/t8code/wiki/Step-5---Store-element-data
  *
- * This is step5 of the t8code tutorials.
+ * This example is based on step5 of the t8code tutorials.
  * In the following we will store data in the individual elements of our forest.
- * To do this, we will again create a uniform forest, which will get adapted as in step4,
- * with the difference that we partition, balance and create ghost elements all in the same step.
- * After adapting the forest we will learn how to build a data array and gather data for
+ * To do this, we create a uniform forest, which we partition, balance and
+ * create ghost elements for, all in the same step.
+ * Afterwards we build a data array and gather data for
  * the local elements. Furthermore, we exchange the data values of the ghost elements and
  * output the volume data to vtu.
  *
  * How you can experiment here:
- *   - Look at the paraview output files of the adapted forest.
+ *   - Look at the paraview output files of the forest.
  *     You can apply a clip filter to look into the cube. Also you can apply (in addition)
  *     the threshold filter to display only elements with certain properties.
  *     But at first you may just want to enter the tooltip selection mode 'Hover Cells On'
  *     to display cell information when hover over them.
- *   - Change the adaptation criterion as you wish to adapt elements or families as desired.
  *   - Store even more data per element, for instance the coordinates of its midpoint.
  *     You can again apply the threshold filter to your new data. Don't forget to write the
  *     data into the output file.
  *  */
 
+#include <cstring>                              /* strcpy */
 #include <t8.h>                                 /* General t8code header, always include this. */
 #include <t8_cmesh/t8_cmesh.h>                  /* cmesh definition and basic interface. */
 #include <t8_cmesh/t8_cmesh_examples.h>         /* A collection of exemplary cmeshes */
@@ -70,10 +70,8 @@ t8code_GPU_experiments_build_forest (sc_MPI_Comm comm, int level)
   t8_forest_t forest = t8_forest_new_uniform (cmesh, scheme, level, 0, comm);
   t8_forest_t forest_apbg;
 
-  /* Adapt, partition, balance and create ghost elements all in the same step. */
+  /* Partition, balance and create ghost elements all in the same step. */
   t8_forest_init (&forest_apbg);
-//  t8_forest_set_user_data (forest_apbg, &adapt_data);
-// t8_forest_set_adapt (forest_apbg, forest, t8_step3_adapt_callback, 0);
   t8_forest_set_partition (forest_apbg, forest, 0);
   t8_forest_set_balance (forest_apbg, NULL, 0);
   t8_forest_set_ghost (forest_apbg, 1, T8_GHOST_FACES);
@@ -248,11 +246,11 @@ t8code_GPU_experiments_main (int argc, char **argv)
   t8_init (SC_LP_PRODUCTION);
 
   /* Print a message on the root process. */
-  t8_global_productionf (" [step5] \n");
-  t8_global_productionf (" [step5] Hello, this is the step5 example of t8code.\n");
+  t8_global_productionf (" [GPU_experiments] \n");
+  t8_global_productionf (" [GPU_experiments] Hello, this is the data example of t8code_GPU_experiments.\n");
   t8_global_productionf (
-    " [step5] In this example we will store data on our elements and exchange the data of ghost elements.\n");
-  t8_global_productionf (" [step5] \n");
+    " [GPU_experiments] In this example we will store data on our elements and exchange the data of ghost elements.\n");
+  t8_global_productionf (" [GPU_experiments] \n");
 
   /* We will use MPI_COMM_WORLD as a communicator. */
   comm = sc_MPI_COMM_WORLD;
@@ -260,38 +258,39 @@ t8code_GPU_experiments_main (int argc, char **argv)
   /*
    * Setup.
    * Build cmesh and uniform forest.
-   * Adapt forest similar to step 3 & 4.
+   * Partition, balance and create ghosts.
    */
 
-  t8_global_productionf (" [step5] \n");
-  t8_global_productionf (" [step5] Creating an adapted forest as in step3.\n");
-  t8_global_productionf (" [step5] \n");
+  t8_global_productionf (" [GPU_experiments] \n");
+  t8_global_productionf (" [GPU_experiments] Creating a uniform forest of level %i.\n", level);
+  t8_global_productionf (" [GPU_experiments] \n");
 
   forest = t8code_GPU_experiments_build_forest (comm, level);
+  t8_global_productionf (" [GPU_experiments] Partitioned, balanced and created ghosts.\n");
   t8_forest_write_vtk (forest, prefix_forest);
-  t8_global_productionf (" [step5] Wrote forest to vtu files: %s*\n", prefix_forest);
+  t8_global_productionf (" [GPU_experiments] Wrote forest to vtu files: %s*\n", prefix_forest);
 
   /*
    * Build data array and gather data for the local elements.
    */
   data = t8code_GPU_experiments_create_element_data (forest);
 
-  t8_global_productionf (" [step5] Computed level and volume data for local elements.\n");
+  t8_global_productionf (" [GPU_experiments] Computed level and volume data for local elements.\n");
   if (t8_forest_get_local_num_leaf_elements (forest) > 0) {
     /* Output the stored data of the first local element (if it exists). */
-    t8_global_productionf (" [step5] Element 0 has level %i and volume %e.\n", data[0].level, data[0].volume);
+    t8_global_productionf (" [GPU_experiments] Element 0 has level %i and volume %e.\n", data[0].level, data[0].volume);
   }
 
   /*
    * Exchange the data values of the ghost elements
    */
   t8code_GPU_experiments_exchange_ghost_data (forest, data);
-  t8_global_productionf (" [step5] Exchanged ghost data.\n");
+  t8_global_productionf (" [GPU_experiments] Exchanged ghost data.\n");
 
   if (t8_forest_get_num_ghosts (forest) > 0) {
     /* output the data of the first ghost element (if it exists) */
     t8_locidx_t first_ghost_index = t8_forest_get_local_num_leaf_elements (forest);
-    t8_global_productionf (" [step5] Ghost 0 has level %i and volume %e.\n", data[first_ghost_index].level,
+    t8_global_productionf (" [GPU_experiments] Ghost 0 has level %i and volume %e.\n", data[first_ghost_index].level,
                            data[first_ghost_index].volume);
   }
 
@@ -299,7 +298,7 @@ t8code_GPU_experiments_main (int argc, char **argv)
    * Output the volume data to vtu.
    */
   t8code_GPU_experiments_output_data_to_vtu (forest, data, prefix_forest_with_data);
-  t8_global_productionf (" [step5] Wrote forest and volume data to %s*.\n", prefix_forest_with_data);
+  t8_global_productionf (" [GPU_experiments] Wrote forest and volume data to %s*.\n", prefix_forest_with_data);
 
   /*
    * clean-up
@@ -310,7 +309,7 @@ t8code_GPU_experiments_main (int argc, char **argv)
 
   /* Destroy the forest. */
   t8_forest_unref (&forest);
-  t8_global_productionf (" [step5] Destroyed forest.\n");
+  t8_global_productionf (" [GPU_experiments] Destroyed forest.\n");
 
   sc_finalize ();
 

@@ -20,11 +20,12 @@
   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 */
 
-/** file t8_step5.h
+/** file t8code_GPU_experiments_data.hxx
+ * Example that stores data per element of a forest and exchanges ghost data.
  */
 
-#ifndef T8_STEP5_H
-#define T8_STEP5_H
+#ifndef T8CODE_GPU_EXPERIMENTS_DATA_HXX
+#define T8CODE_GPU_EXPERIMENTS_DATA_HXX
 
 #include <t8.h>
 
@@ -35,4 +36,4 @@ int
 t8code_GPU_experiments_main (int argc, char **argv);
 
 
-#endif /* !T8_STEP5_H */
+#endif /* !T8CODE_GPU_EXPERIMENTS_DATA_HXX */

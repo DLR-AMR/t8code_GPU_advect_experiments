@@ -20,12 +20,11 @@
   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 */
 
-/* This file is part of the step5 example of t8code.
- * Here, we only wrap the main function. See t8_step5_element_data.cxx for the documentation of
- * the step5 example.
+/* Here, we only wrap the main function. See t8code_GPU_experiments_data.cxx for the documentation of
+ * this example.
  */
 
-#include <t8code_GPU_experiments_data.h>
+#include <t8code_GPU_experiments_data.hxx>
 
 int
 main (int argc, char **argv)
