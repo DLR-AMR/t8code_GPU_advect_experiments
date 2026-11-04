@@ -1,19 +1,19 @@
 # Contributing
 
-t8code_AMD_experiments is an open-source project and contributions from the community are much
+t8code_GPU_experiments is an open-source project and contributions from the community are much
 appreciated. Please feel free to open issues or submit patches (preferably as
 pull requests) any time.
 For larger contributions, it is often beneficial to
 get in contact with one of the principal developers first.
 You can do so by opening a "feature request" issue.
 
-Contributors are required to put their contributions under the FreeBSD license. To do so, add a file `doc/author_NAME.txt` with the content "I place my contributions to t8code_AMD_experiments under the FreeBSD license. FIRSTNAME LASTNAME <EMAIL>"
+Contributors are required to put their contributions under the FreeBSD license. To do so, add a file `doc/author_NAME.txt` with the content "I place my contributions to t8code_GPU_experiments under the FreeBSD license. FIRSTNAME LASTNAME <EMAIL>"
 
 The guidelines from the t8code project apply.
 Please see our Wiki articles on [contributing to t8code](https://github.com/DLR-AMR/t8code/wiki/Coding-Guideline#contributing)
 and [t8code coding guidelines](https://github.com/DLR-AMR/t8code/wiki/Coding-Guideline) for more details.
 
-t8code_AMD_experiments and its direct contributions are licensed under the GPLv3 (see
+t8code_GPU_experiments and its direct contributions are licensed under the GPLv3 (see
 [COPYING](COPYING)). As a contributor, you certify that all your
 contributions are in conformance with the *Developer Certificate of Origin
 (Version 1.1)*, which is reproduced below.

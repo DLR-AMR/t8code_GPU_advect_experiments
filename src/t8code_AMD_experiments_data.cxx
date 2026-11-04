@@ -53,14 +53,14 @@
 
 /* The data that we want to store for each element.
  * In this example we want to store the element's level and volume. */
-struct t8code_AMD_experiments_data_per_element
+struct t8code_GPU_experiments_data_per_element
 {
   int level;
   double volume;
 };
 
 static t8_forest_t
-t8code_AMD_experiments_build_forest (sc_MPI_Comm comm, int level)
+t8code_GPU_experiments_build_forest (sc_MPI_Comm comm, int level)
 {
   t8_cmesh_t cmesh;
   t8_cmesh_init (&cmesh);
@@ -82,12 +82,12 @@ t8code_AMD_experiments_build_forest (sc_MPI_Comm comm, int level)
   return forest_apbg;
 }
 
-static struct t8code_AMD_experiments_data_per_element *
-t8code_AMD_experiments_create_element_data (t8_forest_t forest)
+static struct t8code_GPU_experiments_data_per_element *
+t8code_GPU_experiments_create_element_data (t8_forest_t forest)
 {
   t8_locidx_t num_local_elements;
   t8_locidx_t num_ghost_elements;
-  struct t8code_AMD_experiments_data_per_element *element_data;
+  struct t8code_GPU_experiments_data_per_element *element_data;
 
   /* Check that forest is a committed, that is valid and usable, forest. */
   T8_ASSERT (t8_forest_is_committed (forest));
@@ -103,9 +103,9 @@ t8code_AMD_experiments_create_element_data (t8_forest_t forest)
    * Note that in the latter case you need
    * to use T8_FREE in order to free the memory.
    */
-  element_data = T8_ALLOC (struct t8code_AMD_experiments_data_per_element, num_local_elements + num_ghost_elements);
+  element_data = T8_ALLOC (struct t8code_GPU_experiments_data_per_element, num_local_elements + num_ghost_elements);
   /* Note: We will later need to associate this data with an sc_array in order to exchange the values for
-   *       the ghost elements, which we can do with sc_array_new_data (see t8code_AMD_experiments_exchange_ghost_data).
+   *       the ghost elements, which we can do with sc_array_new_data (see t8code_GPU_experiments_exchange_ghost_data).
    *       We could also have directly allocated the data here in an sc_array with
    *       sc_array_new_count (sizeof (struct data_per_element), num_local_elements + num_ghost_elements);
    */
@@ -161,7 +161,7 @@ t8code_AMD_experiments_create_element_data (t8_forest_t forest)
  * Calling this function will fill all the ghost entries of our element data array with the
  * value on the process that owns the corresponding element. */
 static void
-t8code_AMD_experiments_exchange_ghost_data (t8_forest_t forest, struct t8code_AMD_experiments_data_per_element *data)
+t8code_GPU_experiments_exchange_ghost_data (t8_forest_t forest, struct t8code_GPU_experiments_data_per_element *data)
 {
   sc_array *sc_array_wrapper;
   t8_locidx_t num_elements = t8_forest_get_local_num_leaf_elements (forest);
@@ -169,7 +169,7 @@ t8code_AMD_experiments_exchange_ghost_data (t8_forest_t forest, struct t8code_AM
 
   /* t8_forest_ghost_exchange_data expects an sc_array (of length num_local_elements + num_ghosts).
    * We wrap our data array to an sc_array. */
-  sc_array_wrapper = sc_array_new_data (data, sizeof (struct t8code_AMD_experiments_data_per_element), num_elements + num_ghosts);
+  sc_array_wrapper = sc_array_new_data (data, sizeof (struct t8code_GPU_experiments_data_per_element), num_elements + num_ghosts);
 
   /* Carry out the data exchange. The entries with indices > num_local_elements will get overwritten.
    */
@@ -188,7 +188,7 @@ t8code_AMD_experiments_exchange_ghost_data (t8_forest_t forest, struct t8code_AM
  *                  and  T8_VTK_VECTOR - 3 doubles per element
  */
 static void
-t8code_AMD_experiments_output_data_to_vtu (t8_forest_t forest, struct t8code_AMD_experiments_data_per_element *data, const char *prefix)
+t8code_GPU_experiments_output_data_to_vtu (t8_forest_t forest, struct t8code_GPU_experiments_data_per_element *data, const char *prefix)
 {
   t8_locidx_t num_elements = t8_forest_get_local_num_leaf_elements (forest);
   t8_locidx_t ielem;
@@ -224,18 +224,18 @@ t8code_AMD_experiments_output_data_to_vtu (t8_forest_t forest, struct t8code_AMD
 }
 
 int
-t8code_AMD_experiments_main (int argc, char **argv)
+t8code_GPU_experiments_main (int argc, char **argv)
 {
   int mpiret;
   sc_MPI_Comm comm;
   t8_forest_t forest;
   /* The prefix for our output files. */
-  const char *prefix_forest = "t8code_AMD_experiments_forest";
-  const char *prefix_forest_with_data = "t8code_AMD_experiments_forest_with_volume_data";
+  const char *prefix_forest = "t8code_GPU_experiments_forest";
+  const char *prefix_forest_with_data = "t8code_GPU_experiments_forest_with_volume_data";
   /* The uniform refinement level of the forest. */
   const int level = 3;
   /* The array that will hold our per element data. */
-  t8code_AMD_experiments_data_per_element *data;
+  t8code_GPU_experiments_data_per_element *data;
 
   /* Initialize MPI. This has to happen before we initialize sc or t8code. */
   mpiret = sc_MPI_Init (&argc, &argv);
@@ -267,14 +267,14 @@ t8code_AMD_experiments_main (int argc, char **argv)
   t8_global_productionf (" [step5] Creating an adapted forest as in step3.\n");
   t8_global_productionf (" [step5] \n");
 
-  forest = t8code_AMD_experiments_build_forest (comm, level);
+  forest = t8code_GPU_experiments_build_forest (comm, level);
   t8_forest_write_vtk (forest, prefix_forest);
   t8_global_productionf (" [step5] Wrote forest to vtu files: %s*\n", prefix_forest);
 
   /*
    * Build data array and gather data for the local elements.
    */
-  data = t8code_AMD_experiments_create_element_data (forest);
+  data = t8code_GPU_experiments_create_element_data (forest);
 
   t8_global_productionf (" [step5] Computed level and volume data for local elements.\n");
   if (t8_forest_get_local_num_leaf_elements (forest) > 0) {
@@ -285,7 +285,7 @@ t8code_AMD_experiments_main (int argc, char **argv)
   /*
    * Exchange the data values of the ghost elements
    */
-  t8code_AMD_experiments_exchange_ghost_data (forest, data);
+  t8code_GPU_experiments_exchange_ghost_data (forest, data);
   t8_global_productionf (" [step5] Exchanged ghost data.\n");
 
   if (t8_forest_get_num_ghosts (forest) > 0) {
@@ -298,7 +298,7 @@ t8code_AMD_experiments_main (int argc, char **argv)
   /*
    * Output the volume data to vtu.
    */
-  t8code_AMD_experiments_output_data_to_vtu (forest, data, prefix_forest_with_data);
+  t8code_GPU_experiments_output_data_to_vtu (forest, data, prefix_forest_with_data);
   t8_global_productionf (" [step5] Wrote forest and volume data to %s*.\n", prefix_forest_with_data);
 
   /*

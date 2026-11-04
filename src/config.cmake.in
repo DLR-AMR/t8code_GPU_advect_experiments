@@ -7,13 +7,13 @@ find_dependency( P4EST CONFIG )
 find_dependency( SC CONFIG )
 
 
-set( T8CODE_AMD_EXPERIMENTS_ENABLE_VTK @T8CODE_AMD_EXPERIMENTS_ENABLE_VTK@ )
+set( T8CODE_GPU_EXPERIMENTS_ENABLE_VTK @T8CODE_GPU_EXPERIMENTS_ENABLE_VTK@ )
 
-if(T8CODE_AMD_EXPERIMENTS_ENABLE_VTK)
+if(T8CODE_GPU_EXPERIMENTS_ENABLE_VTK)
     find_dependency(VTK)
-    # Expose the variable T8CODE_AMD_EXPERIMENTS_VTK_VERSION_USED to external CMake scripts linking against t8code
-    # for example with find_package( T8CODE_AMD_EXPERIMENTS REQUIRED )
-    set (T8CODE_AMD_EXPERIMENTS_VTK_VERSION_USED "@T8CODE_AMD_EXPERIMENTS_VTK_VERSION_USED@")
+    # Expose the variable T8CODE_GPU_EXPERIMENTS_VTK_VERSION_USED to external CMake scripts linking against t8code
+    # for example with find_package( T8CODE_GPU_EXPERIMENTS REQUIRED )
+    set (T8CODE_GPU_EXPERIMENTS_VTK_VERSION_USED "@T8CODE_GPU_EXPERIMENTS_VTK_VERSION_USED@")
 endif()
 
 include( "${CMAKE_CURRENT_LIST_DIR}/-targets.cmake" )

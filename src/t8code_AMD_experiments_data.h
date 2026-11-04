@@ -32,7 +32,7 @@
 /** This is the main program of this example.
  */
 int
-t8code_AMD_experiments_main (int argc, char **argv);
+t8code_GPU_experiments_main (int argc, char **argv);
 
 
 #endif /* !T8_STEP5_H */

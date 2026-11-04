@@ -5,7 +5,7 @@
 #                 Empty = autodetect, NONE = disable offloading.
 #
 # Provides:
-#   t8_amd_enable_openmp(<target>)  Links <target> against OpenMP and adds
+#   t8_GPU_enable_openmp(<target>)  Links <target> against OpenMP and adds
 #                                   --offload-arch if a GPU is available.
 
 include_guard(GLOBAL)
@@ -16,7 +16,7 @@ set(OFFLOAD_ARCH "" CACHE STRING
     "GPU architecture(s) for --offload-arch (e.g. gfx90a, gfx942, sm_80). Empty = autodetect, NONE = disable offloading.")
 
 # Detect the GPUs in this machine with amdgpu-arch / nvptx-arch (shipped with LLVM/ROCm clang).
-function(_t8_amd_detect_offload_arch out_var)
+function(_t8_GPU_detect_offload_arch out_var)
   set(_archs "")
   find_program(AMDGPU_ARCH_EXECUTABLE NAMES amdgpu-arch
                HINTS ENV ROCM_PATH /opt/rocm PATH_SUFFIXES llvm/bin bin)
@@ -47,7 +47,7 @@ function(_t8_amd_detect_offload_arch out_var)
 endfunction()
 
 if(NOT OFFLOAD_ARCH)
-  _t8_amd_detect_offload_arch(_offload_arch)
+  _t8_GPU_detect_offload_arch(_offload_arch)
   if(_offload_arch)
     message(STATUS "Detected GPU offload architecture(s): ${_offload_arch}")
   else()
@@ -66,24 +66,24 @@ else()
 endif()
 
 if(_offload_arch AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  message(WARNING "--offload-arch needs a Clang-based compiler (clang++/amdclang++), "
+  message(WARNING "--offload-arch needs a Clang-based compiler (clang++/GPUclang++), "
                   "but the compiler is ${CMAKE_CXX_COMPILER_ID}. Disabling offloading.")
   set(_offload_arch "")
 endif()
 
-string(REPLACE ";" "," T8_AMD_OFFLOAD_ARCH_FLAG "${_offload_arch}")
+string(REPLACE ";" "," T8_GPU_OFFLOAD_ARCH_FLAG "${_offload_arch}")
 
-if(T8_AMD_OFFLOAD_ARCH_FLAG)
-  message(STATUS "OpenMP GPU offloading enabled: --offload-arch=${T8_AMD_OFFLOAD_ARCH_FLAG} "
+if(T8_GPU_OFFLOAD_ARCH_FLAG)
+  message(STATUS "OpenMP GPU offloading enabled: --offload-arch=${T8_GPU_OFFLOAD_ARCH_FLAG} "
                  "(compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
 else()
   message(STATUS "OpenMP GPU offloading disabled, building for host only")
 endif()
 
-function(t8_amd_enable_openmp target)
+function(t8_GPU_enable_openmp target)
   target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
-  if(T8_AMD_OFFLOAD_ARCH_FLAG)
-    target_compile_options(${target} PRIVATE --offload-arch=${T8_AMD_OFFLOAD_ARCH_FLAG})
-    target_link_options(${target} PRIVATE --offload-arch=${T8_AMD_OFFLOAD_ARCH_FLAG})
+  if(T8_GPU_OFFLOAD_ARCH_FLAG)
+    target_compile_options(${target} PRIVATE --offload-arch=${T8_GPU_OFFLOAD_ARCH_FLAG})
+    target_link_options(${target} PRIVATE --offload-arch=${T8_GPU_OFFLOAD_ARCH_FLAG})
   endif()
 endfunction()

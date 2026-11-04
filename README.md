@@ -1,4 +1,4 @@
-# t8code_AMD_experiments
+# t8code_GPU_experiments
 
 A project using t8code build from the t8code_project template (https://github.com/dlr-amr/t8code_project).
 
@@ -38,15 +38,15 @@ make install
 The basic CMake setting file.
 Note that src/ and test/ folders have their own additional CMake files.
 
-### t8code_AMD_experiments_main.cxx
+### t8code_GPU_experiments_main.cxx
 
-A main program to show how to use and link against t8code_AMD_experiments and how to set up t8code.
+A main program to show how to use and link against t8code_GPU_experiments and how to set up t8code.
 
 ### src/
 
 Contains the source and header files of the library.
 
-src/t8code_AMD_experiments_helloworld.cxx and .hxx define a very simple hello world function.
+src/t8code_GPU_experiments_helloworld.cxx and .hxx define a very simple hello world function.
 
 ### test/
 

@@ -25,10 +25,10 @@
  * the step5 example.
  */
 
-#include <t8code_AMD_experiments_data.h>
+#include <t8code_GPU_experiments_data.h>
 
 int
 main (int argc, char **argv)
 {
-  return t8code_AMD_experiments_main (argc, argv);
+  return t8code_GPU_experiments_main (argc, argv);
 }

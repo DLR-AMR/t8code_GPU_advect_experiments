@@ -1,4 +1,4 @@
-#include <t8code_AMD_experiments_helloworld.hxx>
+#include <t8code_GPU_experiments_helloworld.hxx>
 #include <t8.h>
 
 int
@@ -21,7 +21,7 @@ main (int argc, char **argv)
    * You could also set up your own logging functions similar to t8_global_productionf and other, see t8.h/t8.c
    * See t8.h/t8.c for proper wrapper implementations.
    */
-  t8code_AMD_experiments::helloworld();
+  t8code_GPU_experiments::helloworld();
 
   sc_finalize ();
 

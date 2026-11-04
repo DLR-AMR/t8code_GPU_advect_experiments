@@ -1,21 +1,21 @@
-#  This file is part of t8code_AMD_experiments.
-#  t8code_AMD_experiments is a C library to manage a collection (a forest) of multiple
+#  This file is part of t8code_GPU_experiments.
+#  t8code_GPU_experiments is a C library to manage a collection (a forest) of multiple
 #  connected adaptive space-trees of general element types in parallel.
 #
 #  Copyright (C)  the developers
 #
-#  t8code_AMD_experiments is free software; you can redistribute it and/or modify
+#  t8code_GPU_experiments is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation; either version 3 of the License, or
 #  (at your option) any later version.
 #
-#  t8code_AMD_experiments is distributed in the hope that it will be useful,
+#  t8code_GPU_experiments is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
 #  You should have received a copy of the GNU General Public License
-#  along with t8code_AMD_experiments; if not, write to the Free Software Foundation, Inc.,
+#  along with t8code_GPU_experiments; if not, write to the Free Software Foundation, Inc.,
 #  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 # googletest is fetched via FetchContent in cmake/thirdparty.cmake
@@ -24,49 +24,49 @@
 
 # Function to add a test executable and register it with CTest.
 # The test executable is built from the provided source files.
-function( add_t8code_AMD_experiments_test )
+function( add_t8code_GPU_experiments_test )
     set( options "" )
     set( oneValueArgs "NAME" )
     set( multiValueArgs "SOURCES" )
-    cmake_parse_arguments( ADD_T8CODE_AMD_EXPERIMENTS_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
+    cmake_parse_arguments( ADD_T8CODE_GPU_EXPERIMENTS_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
 
     # Get the path of the first file listed in the SOURCES list and use it to determine the build directory.
-    list (LENGTH ADD_T8CODE_AMD_EXPERIMENTS_TEST_SOURCES TEST_SOURCES_LENGTH)
-    list(GET ADD_T8CODE_AMD_EXPERIMENTS_TEST_SOURCES 0 TEST_SOURCE)
+    list (LENGTH ADD_T8CODE_GPU_EXPERIMENTS_TEST_SOURCES TEST_SOURCES_LENGTH)
+    list(GET ADD_T8CODE_GPU_EXPERIMENTS_TEST_SOURCES 0 TEST_SOURCE)
     get_filename_component(TEST_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/${TEST_SOURCE}" DIRECTORY)
     file(RELATIVE_PATH TEST_RELATIVE_DIR "${CMAKE_SOURCE_DIR}" "${TEST_SOURCE_DIR}")
     set(TEST_BUILD_DIR "${CMAKE_BINARY_DIR}/${TEST_RELATIVE_DIR}")
 
-    add_executable( ${ADD_T8CODE_AMD_EXPERIMENTS_TEST_NAME} ${ADD_T8CODE_AMD_EXPERIMENTS_TEST_SOURCES} )
+    add_executable( ${ADD_T8CODE_GPU_EXPERIMENTS_TEST_NAME} ${ADD_T8CODE_GPU_EXPERIMENTS_TEST_SOURCES} )
 
     # Link base libraries.
-    target_include_directories( ${ADD_T8CODE_AMD_EXPERIMENTS_TEST_NAME} PRIVATE ${CMAKE_BINARY_DIR}/src )
-    target_link_libraries( ${ADD_T8CODE_AMD_EXPERIMENTS_TEST_NAME} PRIVATE t8code_AMD_experiments T8CODE::T8 GTest::gtest_main pthread )
+    target_include_directories( ${ADD_T8CODE_GPU_EXPERIMENTS_TEST_NAME} PRIVATE ${CMAKE_BINARY_DIR}/src )
+    target_link_libraries( ${ADD_T8CODE_GPU_EXPERIMENTS_TEST_NAME} PRIVATE t8code_GPU_experiments T8CODE::T8 GTest::gtest_main pthread )
 
-    set_target_properties(${ADD_T8CODE_AMD_EXPERIMENTS_TEST_NAME} PROPERTIES
+    set_target_properties(${ADD_T8CODE_GPU_EXPERIMENTS_TEST_NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${TEST_BUILD_DIR}"
         LIBRARY_OUTPUT_DIRECTORY "${TEST_BUILD_DIR}"
         ARCHIVE_OUTPUT_DIRECTORY "${TEST_BUILD_DIR}"
     )
 
     # Use "mpirun -np 4" as test command
-    separate_arguments (T8CODE_AMD_EXPERIMENTS_TEST_COMMAND_LIST NATIVE_COMMAND "mpirun -np 4")
-    add_test( NAME ${ADD_T8CODE_AMD_EXPERIMENTS_TEST_NAME} COMMAND ${T8CODE_AMD_EXPERIMENTS_TEST_COMMAND_LIST} ${TEST_BUILD_DIR}/${ADD_T8CODE_AMD_EXPERIMENTS_TEST_NAME} )
+    separate_arguments (T8CODE_GPU_EXPERIMENTS_TEST_COMMAND_LIST NATIVE_COMMAND "mpirun -np 4")
+    add_test( NAME ${ADD_T8CODE_GPU_EXPERIMENTS_TEST_NAME} COMMAND ${T8CODE_GPU_EXPERIMENTS_TEST_COMMAND_LIST} ${TEST_BUILD_DIR}/${ADD_T8CODE_GPU_EXPERIMENTS_TEST_NAME} )
 endfunction()
 
 # Function to add a test executable for C++ tests.
-# This function wraps the `add_t8code_AMD_experiments_test` function to include common test sources.
-# Common test sources are t8code_AMD_experiments_gtest_main.cxx and t8code_AMD_experiments_gtest_memory_macros.cxx
-function ( add_t8code_AMD_experiments_cpp_test)
+# This function wraps the `add_t8code_GPU_experiments_test` function to include common test sources.
+# Common test sources are t8code_GPU_experiments_gtest_main.cxx and t8code_GPU_experiments_gtest_memory_macros.cxx
+function ( add_t8code_GPU_experiments_cpp_test)
     set( options "" )
     set( oneValueArgs "NAME" )
     set( multiValueArgs "SOURCES" )
-    cmake_parse_arguments( ADD_T8CODE_AMD_EXPERIMENTS_CPP_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
+    cmake_parse_arguments( ADD_T8CODE_GPU_EXPERIMENTS_CPP_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
 
-    # add cpp sources to SOURCES list and call add_t8code_AMD_experiments_test function
-    list ( APPEND ADD_T8CODE_AMD_EXPERIMENTS_CPP_TEST_SOURCES t8code_AMD_experiments_gtest_main.cxx )
-    add_t8code_AMD_experiments_test( NAME ${ADD_T8CODE_AMD_EXPERIMENTS_CPP_TEST_NAME} SOURCES ${ADD_T8CODE_AMD_EXPERIMENTS_CPP_TEST_SOURCES} )
+    # add cpp sources to SOURCES list and call add_t8code_GPU_experiments_test function
+    list ( APPEND ADD_T8CODE_GPU_EXPERIMENTS_CPP_TEST_SOURCES t8code_GPU_experiments_gtest_main.cxx )
+    add_t8code_GPU_experiments_test( NAME ${ADD_T8CODE_GPU_EXPERIMENTS_CPP_TEST_NAME} SOURCES ${ADD_T8CODE_GPU_EXPERIMENTS_CPP_TEST_SOURCES} )
 endfunction()
 
-add_t8code_AMD_experiments_cpp_test( NAME t8code_AMD_experiments_gtest_example     SOURCES t8code_AMD_experiments_gtest_example.cxx )
-add_t8code_AMD_experiments_cpp_test( NAME t8code_AMD_experiments_gtest_vtk_linkage SOURCES t8code_AMD_experiments_gtest_vtk_linkage.cxx )
+add_t8code_GPU_experiments_cpp_test( NAME t8code_GPU_experiments_gtest_example     SOURCES t8code_GPU_experiments_gtest_example.cxx )
+add_t8code_GPU_experiments_cpp_test( NAME t8code_GPU_experiments_gtest_vtk_linkage SOURCES t8code_GPU_experiments_gtest_vtk_linkage.cxx )
