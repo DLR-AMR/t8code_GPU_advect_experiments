@@ -50,9 +50,10 @@ src/t8code_GPU_experiments_helloworld.cxx and .hxx define a very simple hello wo
 
 ### src/advect/
 
-A copy of the advect example of t8code (example/advect and example/common), built as the executable
-`t8code_GPU_experiments_advect`. It solves the advection equation with adaptive mesh refinement and
-is the starting point for the GPU development. Run it with `-h` for a list of options.
+Based on the advect example of t8code (example/advect and example/common), built as the executable
+`t8code_GPU_experiments_advect`. It solves the advection equation with adaptive mesh refinement.
+The element loop of the solver runs on the GPU with OpenMP offloading and unified shared memory
+(on AMD GPUs set `HSA_XNACK=1`). Run it with `-h` for a list of options.
 
 ### test/
 
