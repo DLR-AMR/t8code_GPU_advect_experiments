@@ -6,7 +6,7 @@
 #
 # Provides:
 #   t8_GPU_enable_openmp(<target>)  Links <target> against OpenMP and adds
-#                                   --offload-arch if a GPU is available.
+#                                   --offload-arch (and -fopenmp at link time) if a GPU is available.
 
 include_guard(GLOBAL)
 
@@ -84,6 +84,8 @@ function(t8_GPU_enable_openmp target)
   target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
   if(T8_GPU_OFFLOAD_ARCH_FLAG)
     target_compile_options(${target} PRIVATE --offload-arch=${T8_GPU_OFFLOAD_ARCH_FLAG})
-    target_link_options(${target} PRIVATE --offload-arch=${T8_GPU_OFFLOAD_ARCH_FLAG})
+    # OpenMP::OpenMP_CXX only adds the OpenMP library to the link line, not -fopenmp.
+    # Clang needs -fopenmp at link time to link libomptarget and the device code.
+    target_link_options(${target} PRIVATE ${OpenMP_CXX_FLAGS} --offload-arch=${T8_GPU_OFFLOAD_ARCH_FLAG})
   endif()
 endfunction()
