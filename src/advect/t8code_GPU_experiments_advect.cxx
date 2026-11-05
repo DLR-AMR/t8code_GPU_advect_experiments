@@ -121,6 +121,8 @@ typedef struct
                                                                 neighbor, one entry for each child face. Not used in 1D. */
   t8_3D_vec (*face_normal)[MAX_FACES][MAX_FACE_NEIGHBORS]; /**< The outward normal of each face (or child face). */
   double (*face_area)[MAX_FACES][MAX_FACE_NEIGHBORS];      /**< The area of each face (or child face). */
+  double *dummy;                                           /**< Result of the dummy operations (see -s option).
+                                                                Not used otherwise. */
 } t8code_GPU_experiments_advect_element_data_t;
 
 /* Allocate an array of n entries of type T.
@@ -153,6 +155,7 @@ t8code_GPU_experiments_advect_element_data_new (const t8_locidx_t num_elements)
   t8code_GPU_experiments_advect_alloc_field (data->face_center, num_elements);
   t8code_GPU_experiments_advect_alloc_field (data->face_normal, num_elements);
   t8code_GPU_experiments_advect_alloc_field (data->face_area, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->dummy, num_elements);
   return data;
 }
 
@@ -178,12 +181,14 @@ t8code_GPU_experiments_advect_element_data_destroy (t8code_GPU_experiments_advec
   T8_FREE (data->face_center);
   T8_FREE (data->face_normal);
   T8_FREE (data->face_area);
+  T8_FREE (data->dummy);
   T8_FREE (data);
   *pdata = NULL;
 }
 
 /* Copy all data of element isrc in src to element idst in dst.
- * The face geometry is not copied, since it is recomputed after each adapt and partition. */
+ * The face geometry is not copied, since it is recomputed after each adapt and partition.
+ * The dummy value is not copied, since it is never read. */
 static void
 t8code_GPU_experiments_advect_element_data_copy (t8code_GPU_experiments_advect_element_data_t *dst, const t8_locidx_t idst,
                                                  const t8code_GPU_experiments_advect_element_data_t *src,
@@ -526,13 +531,13 @@ t8code_GPU_experiments_advect_flux_upwind (const int flow, const double t, const
 /* Compute all fluxes of element lelement and store them in data->fluxes.
  * The element only writes its own fluxes. Thus, each inner face is computed from both sides,
  * but elements can be processed in parallel.
- * phi holds the phi values of all local elements and ghosts, with phi_stride doubles per element. */
+ * phi holds the phi values of all local elements and ghosts. */
 static void
 t8code_GPU_experiments_advect_compute_fluxes (t8code_GPU_experiments_advect_element_data_t *data,
-                                              const t8_locidx_t lelement, const double *phi, const size_t phi_stride,
-                                              const int dim, const int flow, const double t)
+                                              const t8_locidx_t lelement, const double *phi, const int dim,
+                                              const int flow, const double t)
 {
-  const double phi_plus = phi[lelement * phi_stride];
+  const double phi_plus = phi[lelement];
   const int num_faces = data->num_faces[lelement];
   int iface, ineigh;
 
@@ -540,14 +545,14 @@ t8code_GPU_experiments_advect_compute_fluxes (t8code_GPU_experiments_advect_elem
     const int num_neighbors = data->num_neighbors[lelement][iface];
     if (dim == 1) {
       /* At the boundary we use phi = 0 */
-      const double phi_minus = num_neighbors > 0 ? phi[data->neighs[lelement][iface][0] * phi_stride] : 0;
+      const double phi_minus = num_neighbors > 0 ? phi[data->neighs[lelement][iface][0]] : 0;
       data->fluxes[lelement][iface][0] = t8code_GPU_experiments_advect_flux_upwind_1d (
         flow, t, data->midpoint[lelement], data->vol[lelement], phi_plus, phi_minus, iface);
     }
     else if (num_neighbors <= 1) {
       /* There is exactly one face neighbor or the element is at the domain boundary.
        * At the boundary we enforce outflow boundary conditions by using the phi value of the element itself. */
-      const double phi_minus = num_neighbors == 1 ? phi[data->neighs[lelement][iface][0] * phi_stride] : phi_plus;
+      const double phi_minus = num_neighbors == 1 ? phi[data->neighs[lelement][iface][0]] : phi_plus;
       data->fluxes[lelement][iface][0]
         = t8code_GPU_experiments_advect_flux_upwind (flow, t, phi_plus, phi_minus, data->face_center[lelement][iface][0],
                                                      data->face_normal[lelement][iface][0],
@@ -556,7 +561,7 @@ t8code_GPU_experiments_advect_compute_fluxes (t8code_GPU_experiments_advect_elem
     else {
       /* The face is hanging, we compute the flux to each neighbor across the corresponding child face. */
       for (ineigh = 0; ineigh < num_neighbors; ineigh++) {
-        const double phi_minus = phi[data->neighs[lelement][iface][ineigh] * phi_stride];
+        const double phi_minus = phi[data->neighs[lelement][iface][ineigh]];
         data->fluxes[lelement][iface][ineigh] = t8code_GPU_experiments_advect_flux_upwind (
           flow, t, phi_plus, phi_minus, data->face_center[lelement][iface][ineigh],
           data->face_normal[lelement][iface][ineigh], data->face_area[lelement][iface][ineigh]);
@@ -566,27 +571,26 @@ t8code_GPU_experiments_advect_compute_fluxes (t8code_GPU_experiments_advect_elem
 }
 
 /* Simulate more load per element (see -s option).
- * We store the result in the second entry of the element's phi values, which is not used otherwise. */
+ * We store the result in data->dummy, which is not used otherwise. */
 static void
-t8code_GPU_experiments_advect_dummy_op (double *phi, const t8_locidx_t lelement, const size_t phi_stride)
+t8code_GPU_experiments_advect_dummy_op (t8code_GPU_experiments_advect_element_data_t *data, const t8_locidx_t lelement)
 {
   int i, j;
-  double *phi_values = phi + lelement * phi_stride;
+  double dummy = 0;
 
-  phi_values[1] = 0;
   for (i = 1; i < 5; i++) {
-    phi_values[1] *= i;
+    dummy *= i;
     for (j = 0; j < 5; j++) {
-      phi_values[1] += pow (i, j);
+      dummy += pow (i, j);
     }
   }
+  data->dummy[lelement] = dummy;
 }
 
 /* Sum up the fluxes of element lelement and compute its phi value in the next time step. */
 static void
 t8code_GPU_experiments_advect_advance_element (t8code_GPU_experiments_advect_element_data_t *data,
-                                               const t8_locidx_t lelement, const double *phi, const size_t phi_stride,
-                                               const double delta_t)
+                                               const t8_locidx_t lelement, const double *phi, const double delta_t)
 {
   int iface, ineigh;
   double flux_sum = 0;
@@ -600,7 +604,7 @@ t8code_GPU_experiments_advect_advance_element (t8code_GPU_experiments_advect_ele
     }
   }
   /* Phi^t = dt/dx * (f_(j-1/2) - f_(j+1/2)) + Phi^(t-1) */
-  data->phi_new[lelement] = (delta_t / data->vol[lelement]) * flux_sum + phi[lelement * phi_stride];
+  data->phi_new[lelement] = (delta_t / data->vol[lelement]) * flux_sum + phi[lelement];
 }
 
 #pragma omp end declare target
@@ -914,7 +918,7 @@ t8code_GPU_experiments_advect_problem_adapt (t8code_GPU_experiments_advect_probl
   num_elems = t8_forest_get_local_num_leaf_elements (problem->forest_adapt);
   num_elems_p_ghosts = num_elems + t8_forest_get_num_ghosts (problem->forest_adapt);
   problem->element_data_adapt = t8code_GPU_experiments_advect_element_data_new (num_elems);
-  problem->phi_values_adapt = sc_array_new_count ((problem->dummy_op ? 2 : 1) * sizeof (double), num_elems_p_ghosts);
+  problem->phi_values_adapt = sc_array_new_count (sizeof (double), num_elems_p_ghosts);
   /* We now call iterate_replace in which we interpolate the new element data.
    * It is necessary that the old and new forest only differ by at most one level.
    * We guarantee this by calling adapt non-recursively and calling balance without repartitioning. */
@@ -989,7 +993,7 @@ t8code_GPU_experiments_advect_problem_partition (t8code_GPU_experiments_advect_p
   /* Allocate the data arrays for the partitioned elements */
   data = problem->element_data;
   new_data = t8code_GPU_experiments_advect_element_data_new (num_local_elements_new);
-  new_phi = sc_array_new_count (problem->phi_values->elem_size, num_local_elements_new + num_ghosts_new);
+  new_phi = sc_array_new_count (sizeof (double), num_local_elements_new + num_ghosts_new);
   /* Create a view array of the entries for the local elements */
   sc_array_init_view (&phi_view_new, new_phi, 0, num_local_elements_new);
   /* Perform the data partition, one call per element data field */
@@ -1009,7 +1013,8 @@ t8code_GPU_experiments_advect_problem_partition (t8code_GPU_experiments_advect_p
   t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->neighs, new_data->neighs);
   t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->neigh_level,
                                                  new_data->neigh_level);
-  /* The face geometry is not partitioned, since it is recomputed after each partition. */
+  /* The face geometry is not partitioned, since it is recomputed after each partition.
+   * The dummy value is not partitioned, since it is never read. */
   t8_forest_partition_data (problem->forest, forest_partition, &phi_view, &phi_view_new);
   partition_time += sc_MPI_Wtime ();
   if (measure_time) {
@@ -1155,8 +1160,8 @@ t8code_GPU_experiments_advect_problem_init (t8_cmesh_t cmesh, int flow, t8code_G
 
   /* initialize the phi array */
   problem->phi_values
-    = sc_array_new_count ((dummy_op ? 2 : 1) * sizeof (double), t8_forest_get_local_num_leaf_elements (problem->forest)
-                                                                  + t8_forest_get_num_ghosts (problem->forest));
+    = sc_array_new_count (sizeof (double), t8_forest_get_local_num_leaf_elements (problem->forest)
+                                             + t8_forest_get_num_ghosts (problem->forest));
   problem->phi_values_adapt = NULL;
   return problem;
 }
@@ -1457,7 +1462,6 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, int flow, t8code_GPU_expe
     data = problem->element_data;
     const t8_locidx_t num_local_elements = t8_forest_get_local_num_leaf_elements (problem->forest);
     double *phi = (double *) problem->phi_values->array;
-    const size_t phi_stride = problem->phi_values->elem_size / sizeof (double);
     const int flow = problem->flow;
     const double t = problem->t;
     const double delta_t = problem->delta_t;
@@ -1466,13 +1470,13 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, int flow, t8code_GPU_expe
     for (lelement = 0; lelement < num_local_elements; lelement++) {
       /* element loop */
       /* Compute the fluxes across all faces */
-      t8code_GPU_experiments_advect_compute_fluxes (data, lelement, phi, phi_stride, dim, flow, t);
+      t8code_GPU_experiments_advect_compute_fluxes (data, lelement, phi, dim, flow, t);
       if (dummy_op) {
         /* simulate more load per element */
-        t8code_GPU_experiments_advect_dummy_op (phi, lelement, phi_stride);
+        t8code_GPU_experiments_advect_dummy_op (data, lelement);
       }
       /* Compute time step for this element */
-      t8code_GPU_experiments_advect_advance_element (data, lelement, phi, phi_stride, delta_t);
+      t8code_GPU_experiments_advect_advance_element (data, lelement, phi, delta_t);
     } // end of element loop
     flux_time += sc_MPI_Wtime ();
     sc_stats_accumulate (&problem->stats[ADVECT_FLUX], flux_time);
