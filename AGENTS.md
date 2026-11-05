@@ -10,8 +10,9 @@ and adds **OpenMP GPU offloading** (AMD `gfx*` or NVIDIA `sm_*`). It was generat
 [t8code_project](https://github.com/dlr-amr/t8code_project) template. 
 
 So far it holds template scaffolding, a copy of t8code tutorial **step5** (element data plus ghost exchange),
-and a copy of t8code's **advect example** (`src/advect/`), which is the starting point for further development.
-No GPU kernels exist yet. The offloading build setup is in place for them.
+and a copy of t8code's **advect example** (`src/advect/`). In the advect example, the element loop of the solver
+runs on the GPU with OpenMP `target` and unified shared memory (see "GPU offloading in the advect example" below).
+It is the only GPU kernel so far.
 
 ## Layout
 
@@ -25,7 +26,7 @@ No GPU kernels exist yet. The offloading build setup is in place for them.
 | `src/t8code_GPU_experiments_helloworld.{hxx,cxx}` | Template hello world in namespace `t8code_GPU_experiments`. |
 | `src/t8code_GPU_experiments_data.{hxx,cxx}` | t8code step5 example adapted for this project (`t8code_GPU_experiments_main`). |
 | `src/t8code_GPU_experiments_data_main.cxx` | `main()` wrapper for the data example. |
-| `src/advect/t8code_GPU_experiments_advect.cxx` | Copy of t8code `example/advect/t8_advection.cxx` (finite-volume advection solver with adaptive refinement, contains `main`). |
+| `src/advect/t8code_GPU_experiments_advect.cxx` | Based on t8code `example/advect/t8_advection.cxx` (finite-volume advection solver with adaptive refinement, contains `main`). Element data as struct of arrays, element loop offloaded to the GPU. |
 | `src/advect/t8code_GPU_experiments_example_common*.{hxx,cxx}` | Copy of t8code `example/common/` (flow fields, level-set functions, adapt callbacks). |
 | `t8code_GPU_experiments_main.cxx` | `main()` for the hello world executable (MPI/sc/t8 init, then finalize). |
 | `test/` | GoogleTest tests plus shared `gtest_main` that initializes MPI/sc/t8code. |
@@ -81,6 +82,29 @@ ctest            # each test runs as `mpirun -np 4 <exe>`
   Calls into the t8code API (`t8_forest_*`, `t8_cmesh_*`, `t8_vec*`, ...) keep their names.
 - PR titles start with `Documentation:`, `Bugfix:`, `Feature:`, `Improvement:` or `Other:` (see `pull_request_template.md`).
 - Commits, issues and PRs created by an AI agent must contain `[created with claude]`.
+
+## GPU offloading in the advect example
+
+- The element loop in `t8code_GPU_experiments_advect_solve` has `#pragma omp target teams distribute parallel for`.
+  The file has `#pragma omp requires unified_shared_memory`: the kernel reads host memory directly, with no `map` clauses.
+- Element data (`t8code_GPU_experiments_advect_element_data_t`) is a struct of arrays. Per-face fields are
+  per-element blocks, e.g. `data->fluxes[ielem][iface][ineigh]`, with at most `MAX_FACE_NEIGHBORS` (4) neighbors per face.
+  `phi_values` (`sc_array_t`, one double per local element and ghost) is used through a raw `double *phi`.
+- **Code inside the loop must not call t8code or sc functions, use `problem->`, or call function pointers.**
+  - Anything that needs t8code (neighbors, face center/normal/area, including child faces of hanging faces) is precomputed on the host in
+    `compute_mesh_data` after each adapt or partition (and in `init_elements`).
+  - Functions called in the loop are between `#pragma omp declare target` and `#pragma omp end declare target`.
+- **Gather, not scatter**: each element writes only its own entries, so each inner face flux is computed from both sides.
+  Writing into neighbor data from the loop would cause race conditions.
+- The flow field is selected by number (`problem->flow`, `flow_eval` with a `switch`), because `problem->u` is a host
+  function pointer. A new flow function must be added to `choose_flow` and to `flow_eval`, and it must be inside the
+  `declare target` region in `t8code_GPU_experiments_example_common{.hxx,_functions.cxx}`.
+- Running on a GPU needs unified memory support: on AMD gfx90a/gfx942 set `HSA_XNACK=1` (possibly `OFFLOAD_ARCH=gfx90a:xnack+`);
+  MI300A supports it natively. On NVIDIA it needs HMM/ATS. Use `OMP_TARGET_OFFLOAD=MANDATORY` to fail instead of falling back
+  to the host, and `LIBOMPTARGET_INFO=4` to see the kernel launches. Without offloading (e.g. GCC or `OFFLOAD_ARCH=NONE`) the loop runs on the host.
+- Verification: the results must match the original t8code `t8_advection` (`_deps/t8code-src/example/advect/`)
+  for quad, hex, tet, prism, hybrid and 1D meshes with several MPI ranks (start/end volume, l_infty, L_2,
+  element counts per step, `ghost_sent`, `partition_procs_sent`). The original crashes with `-s`; ours does not.
 
 ## Known issues and gotchas
 
