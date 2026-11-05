@@ -97,6 +97,116 @@ const char *advect_stat_names[ADVECT_NUM_STATS] = { "adapt",
                                                     "L_2",
                                                     "volume_loss_[%]" };
 
+/** The per element data, stored as struct of arrays.
+ *  Each array has one entry per local element (num_elements entries). */
+typedef struct
+{
+  t8_locidx_t num_elements;                             /**< Number of local elements, length of each array */
+  t8_3D_vec *midpoint;                                  /**< coordinates of element midpoint in R^3 */
+  double *vol;                                          /**< Volume of the element */
+  double *phi_new;                                      /**< Value of solution at midpoint in next time step */
+  double (*fluxes)[MAX_FACES][MAX_FACE_NEIGHBORS];      /**< The fluxes to each neighbor at a given face.
+                                                             Only the first SC_MAX (1, num_neighbors) entries are used. */
+  int (*flux_valid)[MAX_FACES];                         /**< If > 0, this flux was computed, if <= 0 it was not computed.
+                                                             -1 marks faces whose neighbors were not yet computed. */
+  int *level;                                           /**< The refinement level of the element. */
+  int *num_faces;                                       /**< The number of faces */
+  int (*num_neighbors)[MAX_FACES];                      /**< Number of neighbors for each face */
+  int (*dual_faces)[MAX_FACES][MAX_FACE_NEIGHBORS];     /**< The face indices of the neighbor elements.
+                                                             Only the first num_neighbors entries are used. */
+  t8_locidx_t (*neighs)[MAX_FACES][MAX_FACE_NEIGHBORS]; /**< Indices of the neighbor elements.
+                                                             Only the first num_neighbors entries are used. */
+  int8_t (*neigh_level)[MAX_FACES];                     /**< The level of the face neighbors at this face. */
+} t8code_GPU_experiments_advect_element_data_t;
+
+/* Allocate an array of n entries of type T.
+ * We need this, since T8_ALLOC does not accept array types such as double[MAX_FACES]. */
+template <typename T>
+static void
+t8code_GPU_experiments_advect_alloc_field (T *&field, const t8_locidx_t n)
+{
+  field = T8_ALLOC (T, n);
+}
+
+/* Allocate element data for num_elements elements. The entries are not initialized. */
+static t8code_GPU_experiments_advect_element_data_t *
+t8code_GPU_experiments_advect_element_data_new (const t8_locidx_t num_elements)
+{
+  t8code_GPU_experiments_advect_element_data_t *data = T8_ALLOC (t8code_GPU_experiments_advect_element_data_t, 1);
+
+  data->num_elements = num_elements;
+  t8code_GPU_experiments_advect_alloc_field (data->midpoint, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->vol, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->phi_new, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->fluxes, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->flux_valid, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->level, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->num_faces, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->num_neighbors, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->dual_faces, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->neighs, num_elements);
+  t8code_GPU_experiments_advect_alloc_field (data->neigh_level, num_elements);
+  return data;
+}
+
+/* Free element data and set the pointer to NULL. */
+static void
+t8code_GPU_experiments_advect_element_data_destroy (t8code_GPU_experiments_advect_element_data_t **pdata)
+{
+  t8code_GPU_experiments_advect_element_data_t *data;
+
+  T8_ASSERT (pdata != NULL);
+  data = *pdata;
+  T8_FREE (data->midpoint);
+  T8_FREE (data->vol);
+  T8_FREE (data->phi_new);
+  T8_FREE (data->fluxes);
+  T8_FREE (data->flux_valid);
+  T8_FREE (data->level);
+  T8_FREE (data->num_faces);
+  T8_FREE (data->num_neighbors);
+  T8_FREE (data->dual_faces);
+  T8_FREE (data->neighs);
+  T8_FREE (data->neigh_level);
+  T8_FREE (data);
+  *pdata = NULL;
+}
+
+/* Copy all data of element isrc in src to element idst in dst. */
+static void
+t8code_GPU_experiments_advect_element_data_copy (t8code_GPU_experiments_advect_element_data_t *dst, const t8_locidx_t idst,
+                                                 const t8code_GPU_experiments_advect_element_data_t *src,
+                                                 const t8_locidx_t isrc)
+{
+  T8_ASSERT (0 <= idst && idst < dst->num_elements);
+  T8_ASSERT (0 <= isrc && isrc < src->num_elements);
+  dst->midpoint[idst] = src->midpoint[isrc];
+  dst->vol[idst] = src->vol[isrc];
+  dst->phi_new[idst] = src->phi_new[isrc];
+  memcpy (dst->fluxes[idst], src->fluxes[isrc], sizeof (*dst->fluxes));
+  memcpy (dst->flux_valid[idst], src->flux_valid[isrc], sizeof (*dst->flux_valid));
+  dst->level[idst] = src->level[isrc];
+  dst->num_faces[idst] = src->num_faces[isrc];
+  memcpy (dst->num_neighbors[idst], src->num_neighbors[isrc], sizeof (*dst->num_neighbors));
+  memcpy (dst->dual_faces[idst], src->dual_faces[isrc], sizeof (*dst->dual_faces));
+  memcpy (dst->neighs[idst], src->neighs[isrc], sizeof (*dst->neighs));
+  memcpy (dst->neigh_level[idst], src->neigh_level[isrc], sizeof (*dst->neigh_level));
+}
+
+/* Send the entries of one element data field from the partition of forest_from
+ * to the partition of forest_to. Both arrays have one entry per local element. */
+template <typename T>
+static void
+t8code_GPU_experiments_advect_partition_field (const t8_forest_t forest_from, const t8_forest_t forest_to, T *field_from,
+                                               T *field_to)
+{
+  sc_array_t view_from, view_to;
+
+  sc_array_init_data (&view_from, field_from, sizeof (T), t8_forest_get_local_num_leaf_elements (forest_from));
+  sc_array_init_data (&view_to, field_to, sizeof (T), t8_forest_get_local_num_leaf_elements (forest_to));
+  t8_forest_partition_data (forest_from, forest_to, &view_from, &view_to);
+}
+
 /** The description of the problem configuration.
  *  We store all necessary parameters, such as the initial level-set function, the flow function,
  *  data needed for adaptation etc.
@@ -109,10 +219,8 @@ typedef struct
   void *udata_for_phi;           /**< User data passed to phi */
   t8_forest_t forest;            /**< The forest in use */
   t8_forest_t forest_adapt;      /**< The forest after adaptation */
-  sc_array_t *element_data;      /**< Array of type t8code_GPU_experiments_advect_element_data_t of length
-                              num_local_elements + num_ghosts */
-  /* TODO: shorten element_data by number of ghosts */
-  sc_array_t
+  t8code_GPU_experiments_advect_element_data_t *element_data; /**< The data of the local elements */
+  t8code_GPU_experiments_advect_element_data_t
     *element_data_adapt; /**< element_data for the adapted forest, used during adaptation to interpolate values */
   /* We store the phi values in an extra array, since this data must exist for ghost
    * element as well and is communicated with other processes in ghost_exchange. */
@@ -138,26 +246,6 @@ typedef struct
   int dummy_op;                          /**< If true, we carry out more (but useless) operations
                                      per element, in order to simulate more computation load */
 } t8code_GPU_experiments_advect_problem_t;
-
-/** The per element data */
-typedef struct
-{
-  t8_3D_vec midpoint;             /**< coordinates of element midpoint in R^3 */
-  double vol;                     /**< Volume of this element */
-  double phi_new;                 /**< Value of solution at midpoint in next time step */
-  double fluxes[MAX_FACES][MAX_FACE_NEIGHBORS];      /**< The fluxes to each neighbor at a given face.
-                                                          Only the first SC_MAX (1, num_neighbors) entries are used. */
-  int flux_valid[MAX_FACES];                         /**< If > 0, this flux was computed, if <= 0 it was not computed.
-                                                          -1 marks faces whose neighbors were not yet computed. */
-  int level;                                         /**< The refinement level of the element. */
-  int num_faces;                                     /**< The number of faces */
-  int num_neighbors[MAX_FACES];                      /**< Number of neighbors for each face */
-  int dual_faces[MAX_FACES][MAX_FACE_NEIGHBORS];     /**< The face indices of the neighbor elements.
-                                                          Only the first num_neighbors entries are used. */
-  t8_locidx_t neighs[MAX_FACES][MAX_FACE_NEIGHBORS]; /**< Indices of the neighbor elements.
-                                                          Only the first num_neighbors entries are used. */
-  int8_t neigh_level[MAX_FACES];                     /**< The level of the face neighbors at this face. */
-} t8code_GPU_experiments_advect_element_data_t;
 
 /* Return the phi value of a given local or ghost element.
  * 0 <= ielement < num_elements + num_ghosts
@@ -190,7 +278,6 @@ t8code_GPU_experiments_advect_adapt (t8_forest_t forest, t8_forest_t forest_from
                  [[maybe_unused]] const int num_elements, t8_element_t *elements[])
 {
   t8code_GPU_experiments_advect_problem_t *problem;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
   double band_width, elem_diam;
   int level;
   t8_locidx_t offset;
@@ -219,9 +306,6 @@ t8code_GPU_experiments_advect_adapt (t8_forest_t forest, t8_forest_t forest_from
   offset = t8_forest_get_tree_element_offset (forest_from, ltree_id);
   phi = t8code_GPU_experiments_advect_element_get_phi (problem, lelement_id + offset);
 
-  /* Get a pointer to the element data */
-  elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, lelement_id + offset);
-
   /* Refine if close to levelset, coarsen if not */
   band_width = problem->band_width;
   elem_diam = t8_forest_element_diam (forest_from, ltree_id, elements[0]);
@@ -229,7 +313,7 @@ t8code_GPU_experiments_advect_adapt (t8_forest_t forest, t8_forest_t forest_from
     /* coarsen if this is a family and level is not too small */
     return -(is_family && level > problem->level);
   }
-  else if (fabs (phi) < band_width * elem_diam && elem_data->vol > vol_thresh) {
+  else if (fabs (phi) < band_width * elem_diam && problem->element_data->vol[lelement_id + offset] > vol_thresh) {
     /* refine if level is not too large */
     return level < problem->maxlevel;
   }
@@ -241,17 +325,16 @@ static double
 t8code_GPU_experiments_advect_level_set_volume (const t8code_GPU_experiments_advect_problem_t *problem)
 {
   t8_locidx_t num_local_elements, ielem;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  const t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   double volume = 0, global_volume = 0;
   double phi;
 
   num_local_elements = t8_forest_get_local_num_leaf_elements (problem->forest);
 
   for (ielem = 0; ielem < num_local_elements; ielem++) {
-    elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, ielem);
     phi = t8code_GPU_experiments_advect_element_get_phi (problem, ielem);
     if (phi < 0) {
-      volume += elem_data->vol;
+      volume += data->vol[ielem];
     }
   }
   sc_MPI_Allreduce (&volume, &global_volume, 1, sc_MPI_DOUBLE, sc_MPI_SUM, problem->comm);
@@ -264,17 +347,15 @@ static double
 t8code_GPU_experiments_advect_l_infty_rel (const t8code_GPU_experiments_advect_problem_t *problem, t8code_GPU_experiments_example_level_set_fn analytical_sol, double distance)
 {
   t8_locidx_t num_local_elements, ielem;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  const t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   double phi;
   double ana_sol;
   double error[2] = { -1, 0 }, el_error, global_error[2];
 
   num_local_elements = t8_forest_get_local_num_leaf_elements (problem->forest);
   for (ielem = 0; ielem < num_local_elements; ielem++) {
-    elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, ielem);
-
     /* Compute the analytical solution */
-    ana_sol = analytical_sol (elem_data->midpoint, problem->t, problem->udata_for_phi);
+    ana_sol = analytical_sol (data->midpoint[ielem], problem->t, problem->udata_for_phi);
     if (fabs (ana_sol) < distance) {
       /* Compute the error as the stored value at the midpoint of this element
        * minus the solution at this midpoint */
@@ -297,24 +378,23 @@ static double
 t8code_GPU_experiments_advect_l_2_rel (const t8code_GPU_experiments_advect_problem_t *problem, t8code_GPU_experiments_example_level_set_fn analytical_sol, double distance)
 {
   t8_locidx_t num_local_elements, ielem, count = 0;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  const t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   double phi;
   double diff, ana_sol;
   double error[2] = { 0, 0 }, el_error, global_error[2];
 
   num_local_elements = t8_forest_get_local_num_leaf_elements (problem->forest);
   for (ielem = 0; ielem < num_local_elements; ielem++) {
-    elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, ielem);
     /* Compute the analytical solution */
-    ana_sol = analytical_sol (elem_data->midpoint, problem->t, problem->udata_for_phi);
+    ana_sol = analytical_sol (data->midpoint[ielem], problem->t, problem->udata_for_phi);
     if (fabs (ana_sol) < distance) {
       count++;
       /* Compute the error as the stored value at the midpoint of this element minus the solution at this midpoint */
       phi = t8code_GPU_experiments_advect_element_get_phi (problem, ielem);
       diff = fabs (phi - ana_sol);
-      el_error = diff * diff * elem_data->vol;
+      el_error = diff * diff * data->vol[ielem];
       error[0] += el_error;
-      error[1] += ana_sol * ana_sol * elem_data->vol;
+      error[1] += ana_sol * ana_sol * data->vol[ielem];
     }
   }
   t8_debugf ("[advect] L_2 %e  %e\n", error[0], error[1]);
@@ -335,7 +415,7 @@ t8code_GPU_experiments_advect_flux_upwind_1d (const t8code_GPU_experiments_advec
   t8_3D_vec u_at_x_j_half;
   double phi;
   int sign;
-  t8code_GPU_experiments_advect_element_data_t *el_data_plus;
+  const t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
 
   /*
    *    | --x-- | --x-- |   Two elements, midpoints marked with 'x'
@@ -343,9 +423,8 @@ t8code_GPU_experiments_advect_flux_upwind_1d (const t8code_GPU_experiments_advec
    *          x_j_half
    */
   /* Compute x_j_half */
-  el_data_plus = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, el_plus);
   for (idim = 0; idim < 3; idim++) {
-    x_j_half[idim] = (el_data_plus->midpoint[idim] - (idim == 0 ? el_data_plus->vol / 2 : 0));
+    x_j_half[idim] = (data->midpoint[el_plus][idim] - (idim == 0 ? data->vol[el_plus] / 2 : 0));
   }
   /* Compute u at the interval boundary. */
   problem->u (x_j_half, problem->t, u_at_x_j_half);
@@ -424,21 +503,18 @@ t8code_GPU_experiments_advect_flux_upwind_hanging (const t8code_GPU_experiments_
   const t8_scheme *scheme = t8_forest_get_scheme (problem->forest);
   t8_eclass eclass;
   t8_element_t **face_children;
-  t8code_GPU_experiments_advect_element_data_t *neigh_data;
   double flux = 0;
   int dual_face;
   t8_locidx_t neigh_id;
   int neigh_is_ghost;
-  t8code_GPU_experiments_advect_element_data_t *el_hang;
+  t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   double phi_plus, phi_minus;
 
-  /* Get a pointer to the element */
-  el_hang = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, iel_hang);
   /* Get the eclass for the tree of the element */
   eclass = t8_forest_get_tree_class (problem->forest, ltreeid);
   /* Compute the children of the element at the face */
   num_face_children = scheme->element_get_num_face_children (eclass, element_hang, face);
-  T8_ASSERT (num_face_children == el_hang->num_neighbors[face]);
+  T8_ASSERT (num_face_children == data->num_neighbors[iel_hang][face]);
 
   face_children = T8_ALLOC (t8_element_t *, num_face_children);
   scheme->element_new (eclass, num_face_children, face_children);
@@ -450,28 +526,27 @@ t8code_GPU_experiments_advect_flux_upwind_hanging (const t8code_GPU_experiments_
 
   for (i = 0; i < num_face_children; i++) {
     child_face = scheme->element_face_get_child_face (eclass, element_hang, face, i);
-    /* Get a pointer to the neighbor's element data */
-    neigh_id = el_hang->neighs[face][i];
-    neigh_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, neigh_id);
+    /* Get the index of the neighbor element */
+    neigh_id = data->neighs[iel_hang][face][i];
     neigh_is_ghost = neigh_id >= t8_forest_get_local_num_leaf_elements (problem->forest);
     phi_minus = t8code_GPU_experiments_advect_element_get_phi (problem, neigh_id);
     /* Compute the flux */
-    el_hang->fluxes[face][i]
+    data->fluxes[iel_hang][face][i]
       = t8code_GPU_experiments_advect_flux_upwind (problem, phi_plus, phi_minus, ltreeid, face_children[i], child_face);
     /* Set the flux of the neighbor element */
-    dual_face = el_hang->dual_faces[face][i];
+    dual_face = data->dual_faces[iel_hang][face][i];
     if (!adapted_or_partitioned && !neigh_is_ghost) {
-      SC_CHECK_ABORT (dual_face < neigh_data->num_faces, "num\n");
-      // SC_CHECK_ABORT (neigh_data->num_neighbors[dual_face] == 1, "entry\n");
-      neigh_data->num_neighbors[dual_face] = 1;
-      neigh_data->fluxes[dual_face][0] = -el_hang->fluxes[face][i];
-      neigh_data->flux_valid[dual_face] = 1;
+      SC_CHECK_ABORT (dual_face < data->num_faces[neigh_id], "num\n");
+      // SC_CHECK_ABORT (data->num_neighbors[neigh_id][dual_face] == 1, "entry\n");
+      data->num_neighbors[neigh_id][dual_face] = 1;
+      data->fluxes[neigh_id][dual_face][0] = -data->fluxes[iel_hang][face][i];
+      data->flux_valid[neigh_id][dual_face] = 1;
     }
 
-    flux += el_hang->fluxes[face][i];
+    flux += data->fluxes[iel_hang][face][i];
   }
 
-  el_hang->flux_valid[face] = 1;
+  data->flux_valid[iel_hang][face] = 1;
   /* clean-up */
   scheme->element_destroy (eclass, num_face_children, face_children);
   T8_FREE (face_children);
@@ -497,41 +572,41 @@ t8code_GPU_experiments_advect_advance_element (t8code_GPU_experiments_advect_pro
   double flux_sum = 0;
   int num_faces;
   double phi;
-  t8code_GPU_experiments_advect_element_data_t *elem;
+  t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
 
-  /* Get a pointer to the element */
-  elem = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, lelement);
   /* Get the phi value of the element */
   phi = t8code_GPU_experiments_advect_element_get_phi (problem, lelement);
-  num_faces = elem->num_faces;
+  num_faces = data->num_faces[lelement];
   /* Sum all the fluxes */
   for (iface = 0; iface < num_faces; iface++) {
-    for (ineigh = 0; ineigh < SC_MAX (1, elem->num_neighbors[iface]); ineigh++) {
-      flux_sum += elem->fluxes[iface][ineigh];
+    for (ineigh = 0; ineigh < SC_MAX (1, data->num_neighbors[lelement][iface]); ineigh++) {
+      flux_sum += data->fluxes[lelement][iface][ineigh];
     }
   }
   /* Phi^t = dt/dx * (f_(j-1/2) - f_(j+1/2)) + Phi^(t-1) */
-  elem->phi_new = (problem->delta_t / elem->vol) * flux_sum + phi;
+  data->phi_new[lelement] = (problem->delta_t / data->vol[lelement]) * flux_sum + phi;
 }
 
-/* Compute element midpoint and vol and store at element_data field. */
+/* Compute element midpoint and vol and store them for element ielem in data. */
 static void
-t8code_GPU_experiments_advect_compute_element_data (t8code_GPU_experiments_advect_problem_t *problem, t8code_GPU_experiments_advect_element_data_t *elem_data,
-                                const t8_element_t *element, const t8_locidx_t ltreeid)
+t8code_GPU_experiments_advect_compute_element_data (t8code_GPU_experiments_advect_problem_t *problem,
+                                                    t8code_GPU_experiments_advect_element_data_t *data,
+                                                    const t8_locidx_t ielem, const t8_element_t *element,
+                                                    const t8_locidx_t ltreeid)
 {
   /* Compute the midpoint coordinates of element */
-  t8_forest_element_centroid (problem->forest, ltreeid, element, elem_data->midpoint.data ());
+  t8_forest_element_centroid (problem->forest, ltreeid, element, data->midpoint[ielem].data ());
   /* Compute the length of this element */
-  elem_data->vol = t8_forest_element_volume (problem->forest, ltreeid, element);
+  data->vol[ielem] = t8_forest_element_volume (problem->forest, ltreeid, element);
 }
 
-/* Compute the face neighbors of an element across face iface and store their
- * indices, dual faces and level in the element data. */
+/* Compute the face neighbors of element ielem across face iface and store their
+ * indices, dual faces and level in data. */
 static void
 t8code_GPU_experiments_advect_compute_face_neighbors (const t8code_GPU_experiments_advect_problem_t *problem,
-                                                      t8code_GPU_experiments_advect_element_data_t *elem_data,
-                                                      const t8_element_t *element, const t8_locidx_t ltreeid,
-                                                      const int iface)
+                                                      t8code_GPU_experiments_advect_element_data_t *data,
+                                                      const t8_locidx_t ielem, const t8_element_t *element,
+                                                      const t8_locidx_t ltreeid, const int iface)
 {
   const t8_scheme *scheme = t8_forest_get_scheme (problem->forest);
   const t8_element_t **neighbors;
@@ -545,11 +620,11 @@ t8code_GPU_experiments_advect_compute_face_neighbors (const t8code_GPU_experimen
                                  &neigh_indices, &neigh_eclass);
   SC_CHECK_ABORTF (num_neighbors <= MAX_FACE_NEIGHBORS, "Element has %i neighbors at face %i, at most %i are supported.\n",
                    num_neighbors, iface, MAX_FACE_NEIGHBORS);
-  elem_data->num_neighbors[iface] = num_neighbors;
+  data->num_neighbors[ielem][iface] = num_neighbors;
   for (ineigh = 0; ineigh < num_neighbors; ineigh++) {
-    elem_data->neighs[iface][ineigh] = neigh_indices[ineigh];
-    elem_data->dual_faces[iface][ineigh] = dual_faces[ineigh];
-    elem_data->neigh_level[iface] = scheme->element_get_level (neigh_eclass, neighbors[ineigh]);
+    data->neighs[ielem][iface][ineigh] = neigh_indices[ineigh];
+    data->dual_faces[ielem][iface][ineigh] = dual_faces[ineigh];
+    data->neigh_level[ielem][iface] = scheme->element_get_level (neigh_eclass, neighbors[ineigh]);
   }
   if (num_neighbors > 0) {
     T8_FREE (neighbors);
@@ -573,7 +648,7 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
                    t8_locidx_t first_incoming)
 {
   t8code_GPU_experiments_advect_problem_t *problem;
-  t8code_GPU_experiments_advect_element_data_t *elem_data_in, *elem_data_out;
+  t8code_GPU_experiments_advect_element_data_t *data_in, *data_out;
   t8_locidx_t first_incoming_data, first_outgoing_data;
   int i, iface;
   double phi_old;
@@ -583,31 +658,30 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
   problem = (t8code_GPU_experiments_advect_problem_t *) t8_forest_get_user_data (forest_new);
   T8_ASSERT (forest_old == problem->forest);
   T8_ASSERT (forest_new == problem->forest_adapt);
-  /* Get pointers to the element data */
+  /* Get the element data and the indices of the elements in it */
   first_incoming_data = first_incoming + t8_forest_get_tree_element_offset (forest_new, which_tree);
   first_outgoing_data = first_outgoing + t8_forest_get_tree_element_offset (forest_old, which_tree);
-  elem_data_out = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, first_outgoing_data);
-  elem_data_in
-    = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data_adapt, first_incoming_data);
+  data_out = problem->element_data;
+  data_in = problem->element_data_adapt;
 
   /* Get the old phi value (used in the cases with num_outgoing = 1) */
   phi_old = t8code_GPU_experiments_advect_element_get_phi (problem, first_outgoing_data);
   if (refine == 0) {
     T8_ASSERT (num_incoming == num_outgoing && num_incoming == 1);
     /* The element is not changed, copy phi and vol */
-    memcpy (elem_data_in, elem_data_out, sizeof (t8code_GPU_experiments_advect_element_data_t));
+    t8code_GPU_experiments_advect_element_data_copy (data_in, first_incoming_data, data_out, first_outgoing_data);
     t8code_GPU_experiments_advect_element_set_phi_adapt (problem, first_incoming_data, phi_old);
 #if T8_ENABLE_DEBUG
     /* Get a pointer to the new element */
     const t8_element_t *element
       = t8_forest_get_leaf_element_in_tree (problem->forest_adapt, which_tree, first_incoming);
     /* Debug check number of faces */
-    T8_ASSERT (elem_data_in->num_faces == scheme->element_get_num_faces (tree_class, element));
+    T8_ASSERT (data_in->num_faces[first_incoming_data] == scheme->element_get_num_faces (tree_class, element));
 #endif
     /* Set the neighbor entries to uninitialized */
-    for (iface = 0; iface < elem_data_in->num_faces; iface++) {
-      elem_data_in->num_neighbors[iface] = 0;
-      elem_data_in->flux_valid[iface] = -1;
+    for (iface = 0; iface < data_in->num_faces[first_incoming_data]; iface++) {
+      data_in->num_neighbors[first_incoming_data][iface] = 0;
+      data_in->flux_valid[first_incoming_data][iface] = -1;
     }
   }
   else if (refine == 1) {
@@ -625,17 +699,17 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
       const t8_element_t *element
         = t8_forest_get_leaf_element_in_tree (problem->forest_adapt, which_tree, first_incoming + i);
       /* Compute midpoint and vol of the new element */
-      t8code_GPU_experiments_advect_compute_element_data (problem, elem_data_in + i, element, which_tree);
+      t8code_GPU_experiments_advect_compute_element_data (problem, data_in, first_incoming_data + i, element, which_tree);
       t8code_GPU_experiments_advect_element_set_phi_adapt (problem, first_incoming_data + i, phi_old);
       /* Set the neighbor entries to uninitialized */
       const int num_new_faces = scheme->element_get_num_faces (tree_class, element);
-      elem_data_in[i].num_faces = num_new_faces;
+      data_in->num_faces[first_incoming_data + i] = num_new_faces;
       for (iface = 0; iface < num_new_faces; iface++) {
-        elem_data_in[i].num_neighbors[iface] = 0;
-        elem_data_in[i].flux_valid[iface] = -1;
+        data_in->num_neighbors[first_incoming_data + i][iface] = 0;
+        data_in->flux_valid[first_incoming_data + i][iface] = -1;
       }
       /* Update the level */
-      elem_data_in[i].level = elem_data_out->level + 1;
+      data_in->level[first_incoming_data + i] = data_out->level[first_outgoing_data] + 1;
     }
   }
   else {
@@ -655,7 +729,7 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
     const t8_element_t *element
       = t8_forest_get_leaf_element_in_tree (problem->forest_adapt, which_tree, first_incoming);
     /* Compute midpoint and vol of the new element */
-    t8code_GPU_experiments_advect_compute_element_data (problem, elem_data_in, element, which_tree);
+    t8code_GPU_experiments_advect_compute_element_data (problem, data_in, first_incoming_data, element, which_tree);
 
     /* Compute average of phi */
     for (i = 0; i < num_outgoing; i++) {
@@ -664,14 +738,14 @@ t8code_GPU_experiments_advect_replace (t8_forest_t forest_old, t8_forest_t fores
     phi /= num_outgoing;
     t8code_GPU_experiments_advect_element_set_phi_adapt (problem, first_incoming_data, phi);
     /* Set the neighbor entries to uninitialized */
-    elem_data_in->num_faces = elem_data_out[0].num_faces;
-    T8_ASSERT (elem_data_in->num_faces == scheme->element_get_num_faces (tree_class, element));
-    for (iface = 0; iface < elem_data_in->num_faces; iface++) {
-      elem_data_in->num_neighbors[iface] = 0;
-      elem_data_in->flux_valid[iface] = -1;
+    data_in->num_faces[first_incoming_data] = data_out->num_faces[first_outgoing_data];
+    T8_ASSERT (data_in->num_faces[first_incoming_data] == scheme->element_get_num_faces (tree_class, element));
+    for (iface = 0; iface < data_in->num_faces[first_incoming_data]; iface++) {
+      data_in->num_neighbors[first_incoming_data][iface] = 0;
+      data_in->flux_valid[first_incoming_data][iface] = -1;
     }
     /* update the level */
-    elem_data_in->level = elem_data_out->level - 1;
+    data_in->level[first_incoming_data] = data_out->level[first_outgoing_data] - 1;
   }
 }
 
@@ -682,18 +756,17 @@ t8code_GPU_experiments_advect_problem_elements_invalidate (t8code_GPU_experiment
 
   t8_locidx_t lelement, num_local_elem;
   int iface;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
 
   num_local_elem = t8_forest_get_local_num_leaf_elements (problem->forest);
-  T8_ASSERT (num_local_elem <= (t8_locidx_t) problem->element_data->elem_count);
+  T8_ASSERT (num_local_elem <= data->num_elements);
   /* invalidate all elements */
   for (lelement = 0; lelement < num_local_elem; lelement++) {
-    elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, lelement);
-    for (iface = 0; iface < elem_data->num_faces; iface++) {
+    for (iface = 0; iface < data->num_faces[lelement]; iface++) {
       /* TODO: make face number dim independent */
-      if (elem_data->num_neighbors[iface] > 0) {
-        elem_data->num_neighbors[iface] = 0;
-        elem_data->flux_valid[iface] = -1;
+      if (data->num_neighbors[lelement][iface] > 0) {
+        data->num_neighbors[lelement][iface] = 0;
+        data->flux_valid[lelement][iface] = -1;
       }
     }
   }
@@ -753,7 +826,7 @@ t8code_GPU_experiments_advect_problem_adapt (t8code_GPU_experiments_advect_probl
   /* Allocate new memory for the element_data of the advected forest */
   num_elems = t8_forest_get_local_num_leaf_elements (problem->forest_adapt);
   num_elems_p_ghosts = num_elems + t8_forest_get_num_ghosts (problem->forest_adapt);
-  problem->element_data_adapt = sc_array_new_count (sizeof (t8code_GPU_experiments_advect_element_data_t), num_elems);
+  problem->element_data_adapt = t8code_GPU_experiments_advect_element_data_new (num_elems);
   problem->phi_values_adapt = sc_array_new_count ((problem->dummy_op ? 2 : 1) * sizeof (double), num_elems_p_ghosts);
   /* We now call iterate_replace in which we interpolate the new element data.
    * It is necessary that the old and new forest only differ by at most one level.
@@ -769,7 +842,7 @@ t8code_GPU_experiments_advect_problem_adapt (t8code_GPU_experiments_advect_probl
   }
   /* clean the old element data */
   t8code_GPU_experiments_advect_problem_elements_invalidate (problem);
-  sc_array_destroy (problem->element_data);
+  t8code_GPU_experiments_advect_element_data_destroy (&problem->element_data);
   sc_array_destroy (problem->phi_values);
   /* Free memory for the forest */
   t8_forest_unref (&problem->forest);
@@ -789,8 +862,9 @@ static void
 t8code_GPU_experiments_advect_problem_partition (t8code_GPU_experiments_advect_problem_t *problem, int measure_time)
 {
   t8_forest_t forest_partition;
-  sc_array_t data_view, data_view_new, phi_view, phi_view_new;
-  sc_array_t *new_data, *new_phi;
+  sc_array_t phi_view, phi_view_new;
+  t8code_GPU_experiments_advect_element_data_t *data, *new_data;
+  sc_array_t *new_phi;
   t8_locidx_t num_local_elements, num_local_elements_new;
   t8_locidx_t num_ghosts_new;
   int procs_sent;
@@ -824,17 +898,30 @@ t8code_GPU_experiments_advect_problem_partition (t8code_GPU_experiments_advect_p
   num_local_elements_new = t8_forest_get_local_num_leaf_elements (forest_partition);
   num_ghosts_new = t8_forest_get_num_ghosts (forest_partition);
   /* Create a view array of the entries for the local elements */
-  sc_array_init_view (&data_view, problem->element_data, 0, num_local_elements);
   sc_array_init_view (&phi_view, problem->phi_values, 0, num_local_elements);
-  /* Allocate the data array for the partitioned elements */
-  new_data = sc_array_new_count (sizeof (t8code_GPU_experiments_advect_element_data_t), num_local_elements_new + num_ghosts_new);
+  /* Allocate the data arrays for the partitioned elements */
+  data = problem->element_data;
+  new_data = t8code_GPU_experiments_advect_element_data_new (num_local_elements_new);
   new_phi = sc_array_new_count (sizeof (double), num_local_elements_new + num_ghosts_new);
   /* Create a view array of the entries for the local elements */
-  sc_array_init_view (&data_view_new, new_data, 0, num_local_elements_new);
   sc_array_init_view (&phi_view_new, new_phi, 0, num_local_elements_new);
-  /* Perform the data partition */
+  /* Perform the data partition, one call per element data field */
   partition_time = -sc_MPI_Wtime ();
-  t8_forest_partition_data (problem->forest, forest_partition, &data_view, &data_view_new);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->midpoint, new_data->midpoint);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->vol, new_data->vol);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->phi_new, new_data->phi_new);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->fluxes, new_data->fluxes);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->flux_valid,
+                                                 new_data->flux_valid);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->level, new_data->level);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->num_faces, new_data->num_faces);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->num_neighbors,
+                                                 new_data->num_neighbors);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->dual_faces,
+                                                 new_data->dual_faces);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->neighs, new_data->neighs);
+  t8code_GPU_experiments_advect_partition_field (problem->forest, forest_partition, data->neigh_level,
+                                                 new_data->neigh_level);
   t8_forest_partition_data (problem->forest, forest_partition, &phi_view, &phi_view_new);
   partition_time += sc_MPI_Wtime ();
   if (measure_time) {
@@ -849,7 +936,7 @@ t8code_GPU_experiments_advect_problem_partition (t8code_GPU_experiments_advect_p
   t8code_GPU_experiments_advect_problem_elements_invalidate (problem);
   t8_forest_unref (&problem->forest);
   problem->forest = forest_partition;
-  sc_array_destroy (problem->element_data);
+  t8code_GPU_experiments_advect_element_data_destroy (&problem->element_data);
   problem->element_data = new_data;
   sc_array_destroy (problem->phi_values);
   problem->phi_values = new_phi;
@@ -971,10 +1058,10 @@ t8code_GPU_experiments_advect_problem_init (t8_cmesh_t cmesh, t8code_GPU_experim
 
   problem->forest = t8_forest_new_uniform (cmesh, default_scheme, level, 1, comm);
 
-  /* Initialize the element array with num_local_elements + num_ghosts entries. */
+  /* Initialize the element data with num_local_elements entries. */
 
   problem->element_data
-    = sc_array_new_count (sizeof (t8code_GPU_experiments_advect_element_data_t), t8_forest_get_local_num_leaf_elements (problem->forest));
+    = t8code_GPU_experiments_advect_element_data_new (t8_forest_get_local_num_leaf_elements (problem->forest));
   problem->element_data_adapt = NULL;
 
   /* initialize the phi array */
@@ -991,20 +1078,19 @@ static void
 t8code_GPU_experiments_advect_project_element_data (t8code_GPU_experiments_advect_problem_t *problem)
 {
   t8_locidx_t num_local_elements, ielem;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   int iface;
 
   num_local_elements = t8_forest_get_local_num_leaf_elements (problem->forest);
   for (ielem = 0; ielem < num_local_elements; ielem++) {
-    elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, ielem);
     /* Currently the mesh does not change, thus the projected value is
      * just the computed value */
-    t8code_GPU_experiments_advect_element_set_phi (problem, ielem, elem_data->phi_new);
+    t8code_GPU_experiments_advect_element_set_phi (problem, ielem, data->phi_new[ielem]);
     /* Set all fluxes to invalid */
-    for (iface = 0; iface < elem_data->num_faces; iface++) {
-      if (elem_data->flux_valid[iface] >= 0) {
+    for (iface = 0; iface < data->num_faces[ielem]; iface++) {
+      if (data->flux_valid[ielem][iface] >= 0) {
         /* If they are allocated (>= 0), set to allocated and not computed (=0) */
-        elem_data->flux_valid[iface] = 0;
+        data->flux_valid[ielem][iface] = 0;
       }
     }
   }
@@ -1016,7 +1102,7 @@ t8code_GPU_experiments_advect_problem_init_elements (t8code_GPU_experiments_adve
   t8_locidx_t itree, ielement, idata;
   t8_locidx_t num_trees, num_elems_in_tree;
   int iface;
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   const t8_scheme *scheme = t8_forest_get_scheme (problem->forest);
   double speed, max_speed = 0, min_diam = -1, delta_t, min_delta_t;
   t8_3D_vec u;
@@ -1031,15 +1117,14 @@ t8code_GPU_experiments_advect_problem_init_elements (t8code_GPU_experiments_adve
     num_elems_in_tree = t8_forest_get_tree_num_leaf_elements (problem->forest, itree);
     for (ielement = 0; ielement < num_elems_in_tree; ielement++, idata++) {
       const t8_element_t *element = t8_forest_get_leaf_element_in_tree (problem->forest, itree, ielement);
-      elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, idata);
       /* Initialize the element's midpoint and volume */
-      t8code_GPU_experiments_advect_compute_element_data (problem, elem_data, element, itree);
+      t8code_GPU_experiments_advect_compute_element_data (problem, data, idata, element, itree);
       /* Compute the minimum diameter */
       diam = t8_forest_element_diam (problem->forest, itree, element);
       T8_ASSERT (diam > 0);
       min_diam = min_diam < 0 ? diam : SC_MIN (min_diam, diam);
       /* Compute the maximum velocity */
-      problem->u (elem_data->midpoint, problem->t, u);
+      problem->u (data->midpoint[idata], problem->t, u);
       speed = t8_norm (u);
       max_speed = SC_MAX (max_speed, speed);
 
@@ -1051,18 +1136,18 @@ t8code_GPU_experiments_advect_problem_init_elements (t8code_GPU_experiments_adve
       min_delta_t = SC_MIN (delta_t, min_delta_t);
       if (problem->volume_refine >= 0 && problem->min_vol <= 0) {
         /* Compute the minimum volume */
-        min_vol = SC_MIN (min_vol, elem_data->vol);
+        min_vol = SC_MIN (min_vol, data->vol[idata]);
       }
       /* Set the initial condition */
-      t8code_GPU_experiments_advect_element_set_phi (problem, idata, problem->phi_0 (elem_data->midpoint, 0, problem->udata_for_phi));
+      t8code_GPU_experiments_advect_element_set_phi (problem, idata, problem->phi_0 (data->midpoint[idata], 0, problem->udata_for_phi));
       /* Set the level */
-      elem_data->level = scheme->element_get_level (tree_class, element);
+      data->level[idata] = scheme->element_get_level (tree_class, element);
       /* Set the faces */
-      elem_data->num_faces = scheme->element_get_num_faces (tree_class, element);
-      for (iface = 0; iface < elem_data->num_faces; iface++) {
+      data->num_faces[idata] = scheme->element_get_num_faces (tree_class, element);
+      for (iface = 0; iface < data->num_faces[idata]; iface++) {
         /* Compute the indices of the face neighbors */
-        t8code_GPU_experiments_advect_compute_face_neighbors (problem, elem_data, element, itree, iface);
-        elem_data->flux_valid[iface] = 0;
+        t8code_GPU_experiments_advect_compute_face_neighbors (problem, data, idata, element, itree, iface);
+        data->flux_valid[idata][iface] = 0;
       }
     }
   }
@@ -1086,7 +1171,7 @@ t8code_GPU_experiments_advect_write_vtk (t8code_GPU_experiments_advect_problem_t
   t8_3D_vec u_temp;
   t8_locidx_t num_local_elements, ielem;
   t8_vtk_data_field_t vtk_data[5];
-  t8code_GPU_experiments_advect_element_data_t *elem_data;
+  const t8code_GPU_experiments_advect_element_data_t *data = problem->element_data;
   char fileprefix[BUFSIZ];
   int idim;
   double phi;
@@ -1104,12 +1189,11 @@ t8code_GPU_experiments_advect_write_vtk (t8code_GPU_experiments_advect_problem_t
 
   /* Fill u and phi arrays with their values */
   for (ielem = 0; ielem < num_local_elements; ielem++) {
-    elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, ielem);
     phi = t8code_GPU_experiments_advect_element_get_phi (problem, ielem);
     u_and_phi_array[0][ielem] = phi;
-    u_and_phi_array[1][ielem] = problem->phi_0 (elem_data->midpoint, problem->t, problem->udata_for_phi);
+    u_and_phi_array[1][ielem] = problem->phi_0 (data->midpoint[ielem], problem->t, problem->udata_for_phi);
     u_and_phi_array[2][ielem] = phi - u_and_phi_array[1][ielem];
-    problem->u (elem_data->midpoint, problem->t, u_temp);
+    problem->u (data->midpoint[ielem], problem->t, u_temp);
     for (idim = 0; idim < 3; idim++) {
       u_and_phi_array[3][3 * ielem + idim] = u_temp[idim];
     }
@@ -1155,7 +1239,7 @@ t8code_GPU_experiments_advect_print_phi (t8code_GPU_experiments_advect_problem_t
   double phi;
 
   num_local_els = t8_forest_get_local_num_leaf_elements (problem->forest);
-  for (ielement = 0; ielement < (t8_locidx_t) problem->element_data->elem_count; ielement++) {
+  for (ielement = 0; ielement < (t8_locidx_t) problem->phi_values->elem_count; ielement++) {
     phi = t8code_GPU_experiments_advect_element_get_phi (problem, ielement);
     snprintf (buffer + strlen (buffer), BUFSIZ - strlen (buffer), "%.2f |%s ", phi,
               ielement == num_local_els - 1 ? "|" : "");
@@ -1179,9 +1263,9 @@ t8code_GPU_experiments_advect_problem_destroy (t8code_GPU_experiments_advect_pro
   /* invalidate elements */
   t8code_GPU_experiments_advect_problem_elements_invalidate (problem);
   /* Free the element array */
-  sc_array_destroy (problem->element_data);
+  t8code_GPU_experiments_advect_element_data_destroy (&problem->element_data);
   if (problem->element_data_adapt != NULL) {
-    sc_array_destroy (problem->element_data_adapt);
+    t8code_GPU_experiments_advect_element_data_destroy (&problem->element_data_adapt);
   }
   sc_array_destroy (problem->phi_values);
   if (problem->phi_values_adapt != NULL) {
@@ -1202,7 +1286,7 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
   t8code_GPU_experiments_advect_problem_t *problem;
   int iface;
   t8_locidx_t itree, ielement, lelement;
-  t8code_GPU_experiments_advect_element_data_t *elem_data, *neigh_data = NULL;
+  t8code_GPU_experiments_advect_element_data_t *data;
   double flux;
   double l_infty, L_2;
   int modulus, time_steps;
@@ -1274,27 +1358,27 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
     sc_stats_accumulate (&problem->stats[ADVECT_ELEM_AVG], t8_forest_get_global_num_leaf_elements (problem->forest));
 
     solve_time -= sc_MPI_Wtime ();
+    /* Get the element data. This has to be done in each time step, since adapt and partition replace it. */
+    data = problem->element_data;
     for (itree = 0, lelement = 0; itree < t8_forest_get_num_local_trees (problem->forest); itree++) {
       /* tree loop */
       /* Get the scheme of this tree */
       for (ielement = 0; ielement < t8_forest_get_tree_num_leaf_elements (problem->forest, itree);
            ielement++, lelement++) {
         /* element loop */
-        /* Get a pointer to the element data */
-        elem_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, lelement);
         const t8_element_t *elem = t8_forest_get_leaf_element_in_tree (problem->forest, itree, ielement);
-        num_faces = elem_data->num_faces;
+        num_faces = data->num_faces[lelement];
         /* Compute left and right flux */
         for (iface = 0; iface < num_faces; iface++) {
-          if (elem_data->flux_valid[iface] <= 0 || adapted_or_partitioned) {
+          if (data->flux_valid[lelement][iface] <= 0 || adapted_or_partitioned) {
 
             /* Compute flux at this face */
             if (adapted_or_partitioned) {
               /* We changed the mesh, so that we have to calculate the neighbor
                * indices again. */
               neighbor_time = -sc_MPI_Wtime ();
-              t8code_GPU_experiments_advect_compute_face_neighbors (problem, elem_data, elem, itree, iface);
-              elem_data->flux_valid[iface] = 0;
+              t8code_GPU_experiments_advect_compute_face_neighbors (problem, data, lelement, elem, itree, iface);
+              data->flux_valid[lelement][iface] = 0;
 
               neighbor_time += sc_MPI_Wtime ();
               sc_stats_accumulate (&problem->stats[ADVECT_NEIGHS], neighbor_time);
@@ -1303,15 +1387,14 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
             }
 
             /* sensible default */
-            neigh_data = NULL;
             neigh_is_ghost = 0;
             /* Compute whether this is a hanging face
              * and whether the first neighbor is a ghost */
-            if (elem_data->num_neighbors[iface] >= 1) {
+            if (data->num_neighbors[lelement][iface] >= 1) {
 
-              neigh_index = elem_data->neighs[iface][0];
+              neigh_index = data->neighs[lelement][iface][0];
               neigh_is_ghost = neigh_index >= t8_forest_get_local_num_leaf_elements (problem->forest);
-              hanging = elem_data->level != elem_data->neigh_level[iface];
+              hanging = data->level[lelement] != data->neigh_level[lelement][iface];
             }
             else {
               hanging = 0;
@@ -1319,59 +1402,54 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, t8code_GPU_experiments_fl
             }
             flux_time = -sc_MPI_Wtime ();
             if (problem->dim == 1) {
-              if (elem_data->num_neighbors[iface] == 0) {
-                T8_ASSERT (elem_data->num_neighbors[iface] <= 0);
+              if (data->num_neighbors[lelement][iface] == 0) {
+                T8_ASSERT (data->num_neighbors[lelement][iface] <= 0);
                 /* This is a boundary */
                 neigh_index = -1;
               }
               flux = t8code_GPU_experiments_advect_flux_upwind_1d (problem, lelement, neigh_index, iface);
-              elem_data->fluxes[iface][0] = flux;
-              elem_data->flux_valid[iface] = 1;
+              data->fluxes[lelement][iface][0] = flux;
+              data->flux_valid[lelement][iface] = 1;
             }
             else {
               T8_ASSERT (problem->dim == 2 || problem->dim == 3);
-              /* Check whether the flux for the neighbor element was computed */
-              /* Get a pointer to the neighbor element */
-              if (elem_data->num_neighbors[iface] >= 1 && !neigh_is_ghost) {
-                neigh_data = (t8code_GPU_experiments_advect_element_data_t *) t8_sc_array_index_locidx (problem->element_data, neigh_index);
-              }
 
               /* Get the phi value at the current element */
               phi_plus = t8code_GPU_experiments_advect_element_get_phi (problem, lelement);
-              if (elem_data->num_neighbors[iface] == 1) {
-                dual_face = elem_data->dual_faces[iface][0];
+              if (data->num_neighbors[lelement][iface] == 1) {
+                dual_face = data->dual_faces[lelement][iface][0];
                 /* There is exactly one face-neighbor */
                 /* get the phi value at the neighbor element */
                 phi_minus = t8code_GPU_experiments_advect_element_get_phi (problem, neigh_index);
                 flux = t8code_GPU_experiments_advect_flux_upwind (problem, phi_plus, phi_minus, itree, elem, iface);
 
-                elem_data->flux_valid[iface] = 1;
-                elem_data->fluxes[iface][0] = flux;
+                data->flux_valid[lelement][iface] = 1;
+                data->fluxes[lelement][iface][0] = flux;
 
                 /* If this face is not hanging, we can set the
                  * flux of the neighbor element as well */
                 if (!adapted_or_partitioned && !neigh_is_ghost && !hanging) {
-                  SC_CHECK_ABORT (dual_face < neigh_data->num_faces, "num\n");
-                  //         SC_CHECK_ABORT (neigh_data->num_neighbors[dual_face] == 1, "dual face\n");
-                  neigh_data->fluxes[dual_face][0] = -flux;
-                  neigh_data->dual_faces[dual_face][0] = iface;
-                  neigh_data->neighs[dual_face][0] = lelement;
-                  neigh_data->flux_valid[dual_face] = 1;
+                  SC_CHECK_ABORT (dual_face < data->num_faces[neigh_index], "num\n");
+                  //         SC_CHECK_ABORT (data->num_neighbors[neigh_index][dual_face] == 1, "dual face\n");
+                  data->fluxes[neigh_index][dual_face][0] = -flux;
+                  data->dual_faces[neigh_index][dual_face][0] = iface;
+                  data->neighs[neigh_index][dual_face][0] = lelement;
+                  data->flux_valid[neigh_index][dual_face] = 1;
                 }
               }
-              else if (elem_data->num_neighbors[iface] > 1) {
+              else if (data->num_neighbors[lelement][iface] > 1) {
                 flux = t8code_GPU_experiments_advect_flux_upwind_hanging (problem, lelement, itree, elem, iface, adapted_or_partitioned);
               }
               else {
                 /* This element is at the domain boundary */
                 /* We enforce outflow boundary conditions */
-                T8_ASSERT (elem_data->num_neighbors[iface] <= 0);
+                T8_ASSERT (data->num_neighbors[lelement][iface] <= 0);
                 t8code_GPU_experiments_advect_boundary_set_phi (problem, lelement, &phi_minus);
 
                 flux = t8code_GPU_experiments_advect_flux_upwind (problem, phi_plus, phi_minus, itree, elem, iface);
 
-                elem_data->flux_valid[iface] = 1;
-                elem_data->fluxes[iface][0] = flux;
+                data->flux_valid[lelement][iface] = 1;
+                data->fluxes[lelement][iface][0] = flux;
               }
             }
             flux_time += sc_MPI_Wtime ();
