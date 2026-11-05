@@ -163,6 +163,9 @@ t8code_GPU_experiments_scalar3d_sphere_05_0z_midpoint_375_radius (const t8_3D_ve
   return t8code_GPU_experiments_scalar3d_sphere (x, M, 0.375);
 }
 
+/* The flow functions are also compiled for the device, so that they can be evaluated in offloaded loops. */
+#pragma omp declare target
+
 void
 t8code_GPU_experiments_flow_constant_one_vec ([[maybe_unused]] const t8_3D_vec &x, [[maybe_unused]] const double t, t8_3D_vec &x_out)
 {
@@ -234,12 +237,11 @@ t8code_GPU_experiments_incomp_cube_df_sin (double x)
 void
 t8code_GPU_experiments_flow_incomp_cube_flow (const t8_3D_vec &x, const double t, t8_3D_vec &x_out)
 {
-  double (*f) (double) = t8code_GPU_experiments_incomp_cube_f_sin;
-  double (*df) (double) = t8code_GPU_experiments_incomp_cube_df_sin;
-
-  x_out[0] = f (x[0]) * (df (x[1]) - df (x[2]));
-  x_out[1] = -1. * f (x[1]) * df (x[0]);
-  x_out[2] = f (x[2]) * df (x[0]);
+  /* We call f and df directly instead of through function pointers, since this function is also used on the device. */
+  x_out[0] = t8code_GPU_experiments_incomp_cube_f_sin (x[0])
+             * (t8code_GPU_experiments_incomp_cube_df_sin (x[1]) - t8code_GPU_experiments_incomp_cube_df_sin (x[2]));
+  x_out[1] = -1. * t8code_GPU_experiments_incomp_cube_f_sin (x[1]) * t8code_GPU_experiments_incomp_cube_df_sin (x[0]);
+  x_out[2] = t8code_GPU_experiments_incomp_cube_f_sin (x[2]) * t8code_GPU_experiments_incomp_cube_df_sin (x[0]);
 
   t8_ax (x_out, 1. / 2);
   /* We reverse the flow at time 0.5 */
@@ -395,3 +397,5 @@ t8code_GPU_experiments_flow_around_circle_with_angular_velocity (const t8_3D_vec
   x_out[1] = sin (theta) * u_r + cos (theta) * u_theta;
   x_out[2] = 0;
 }
+
+#pragma omp end declare target

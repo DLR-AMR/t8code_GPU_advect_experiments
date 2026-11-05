@@ -198,7 +198,9 @@ t8code_GPU_experiments_scalar3d_sphere_03_midpoint_25_radius (const t8_3D_vec &x
  */
 double
 t8code_GPU_experiments_scalar3d_sphere_05_0z_midpoint_375_radius (const t8_3D_vec &x, const double t);
-/** Flow functions */
+/** Flow functions
+ * They are also compiled for the device, so that they can be evaluated in offloaded loops. */
+#pragma omp declare target
 
 /** Returns always 1 in each coordinate.
  */
@@ -240,5 +242,7 @@ t8code_GPU_experiments_flow_stokes_flow_sphere_shell (const t8_3D_vec &x_in, con
 
 void
 t8code_GPU_experiments_flow_around_circle_with_angular_velocity (const t8_3D_vec &x, const double t, t8_3D_vec &x_out);
+
+#pragma omp end declare target
 
 #endif /* !T8CODE_GPU_EXPERIMENTS_EXAMPLE_COMMON_HXX */
