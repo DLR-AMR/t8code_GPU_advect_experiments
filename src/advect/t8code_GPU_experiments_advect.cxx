@@ -40,6 +40,8 @@
 #include <t8_cmesh/t8_cmesh_examples.h>
 #include <t8_vector/t8_vec.hxx>
 
+#pragma omp requires unified_shared_memory
+
 #define MAX_FACES 8 /* The maximum number of faces of an element */
 /* TODO: This is not memory efficient. If we run out of memory, we can optimize here. */
 #define MAX_FACE_NEIGHBORS 4 /* The maximum number of face neighbors at one face in a 2:1 balanced forest */
@@ -1467,6 +1469,7 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, int flow, t8code_GPU_expe
     const double delta_t = problem->delta_t;
 
     flux_time = -sc_MPI_Wtime ();
+#pragma omp target teams distribute parallel for
     for (lelement = 0; lelement < num_local_elements; lelement++) {
       /* element loop */
       /* Compute the fluxes across all faces */
