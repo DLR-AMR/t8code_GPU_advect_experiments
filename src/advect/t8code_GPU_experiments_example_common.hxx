@@ -198,6 +198,10 @@ t8code_GPU_experiments_scalar3d_sphere_03_midpoint_25_radius (const t8_3D_vec &x
  */
 double
 t8code_GPU_experiments_scalar3d_sphere_05_0z_midpoint_375_radius (const t8_3D_vec &x, const double t);
+/* All translation units with device code must use the same requires directive, otherwise
+ * the offload runtime aborts. It is placed here so that every file including this header has it. */
+#pragma omp requires unified_shared_memory
+
 /** Flow functions
  * They are also compiled for the device, so that they can be evaluated in offloaded loops. */
 #pragma omp declare target

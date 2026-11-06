@@ -39,8 +39,7 @@
 #include <t8_vtk/t8_vtk_writer.h>
 #include <t8_cmesh/t8_cmesh_examples.h>
 #include <t8_vector/t8_vec.hxx>
-
-#pragma omp requires unified_shared_memory
+/* '#pragma omp requires unified_shared_memory' is in t8code_GPU_experiments_example_common.hxx */
 
 #define MAX_FACES 8 /* The maximum number of faces of an element */
 /* TODO: This is not memory efficient. If we run out of memory, we can optimize here. */

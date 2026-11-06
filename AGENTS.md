@@ -87,7 +87,9 @@ ctest            # each test runs as `mpirun -np 4 <exe>`
 ## GPU offloading in the advect example
 
 - The element loop in `t8code_GPU_experiments_advect_solve` has `#pragma omp target teams distribute parallel for`.
-  The file has `#pragma omp requires unified_shared_memory`: the kernel reads host memory directly, with no `map` clauses.
+  The kernel reads host memory directly, with no `map` clauses (`#pragma omp requires unified_shared_memory`).
+  The `requires` is in `t8code_GPU_experiments_example_common.hxx`, because all translation units with device code
+  must have it (otherwise the runtime aborts with "not used consistently"). Clang rejects a second copy in the same file.
 - Element data (`t8code_GPU_experiments_advect_element_data_t`) is a struct of arrays. Per-face fields are
   per-element blocks, e.g. `data->fluxes[ielem][iface][ineigh]`, with at most `MAX_FACE_NEIGHBORS` (4) neighbors per face.
   `phi_values` (`sc_array_t`, one double per local element and ghost) is used through a raw `double *phi`.
