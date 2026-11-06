@@ -42,6 +42,9 @@ function(_t8_GPU_detect_offload_arch out_var)
     endif()
   endforeach()
   list(FILTER _archs EXCLUDE REGEX "^gfx000$")   # CPU agent reported by ROCm
+  # Newer amdgpu-arch versions report the current mode as target features (e.g. gfx90a:sramecc+:xnack-).
+  # Strip them so that the image runs with HSA_XNACK=0 and HSA_XNACK=1 (needed for unified shared memory).
+  list(TRANSFORM _archs REPLACE ":.*$" "")
   list(REMOVE_DUPLICATES _archs)
   set(${out_var} "${_archs}" PARENT_SCOPE)
 endfunction()

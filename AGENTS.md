@@ -54,6 +54,7 @@ ctest            # each test runs as `mpirun -np 4 <exe>`
 - On the first configure, t8code is downloaded and built through FetchContent. This takes a while and needs network access.
 - **`OFFLOAD_ARCH`** cache variable (see `cmake/OpenMPOffload.cmake`):
   - empty (default): autodetect with `amdgpu-arch` / `nvptx-arch`. These are searched in `$ROCM_PATH`, `/opt/rocm`, and `PATH`. `gfx000` (the ROCm CPU agent) is filtered out.
+    Target features such as `:xnack-` are stripped, so the image runs with and without `HSA_XNACK=1`.
   - `gfx942`, `gfx90a`, `sm_80`, ... (comma or `;` list): set it explicitly. You need this on login nodes that have no GPU.
   - `NONE`: build host-only OpenMP and silence the "no GPU" warning.
   - If the compiler is not Clang, offloading is turned off with a warning.
