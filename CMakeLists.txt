@@ -75,7 +75,11 @@ add_executable (t8code_GPU_experiments_advect
   src/advect/t8code_GPU_experiments_advect.cxx
   src/advect/t8code_GPU_experiments_example_common.cxx
   src/advect/t8code_GPU_experiments_example_common_functions.cxx)
-target_link_libraries (t8code_GPU_experiments_advect LINK_PUBLIC t8code_GPU_experiments T8CODE::T8)
+# Do not link the t8code_GPU_experiments library (it is not used here). It is a shared library linked with
+# offloading, so it registers its own OpenMP requires flags. These differ from the executable's
+# (unified_shared_memory) and the offload runtime aborts with "... not used consistently".
+target_include_directories (t8code_GPU_experiments_advect PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries (t8code_GPU_experiments_advect LINK_PUBLIC T8CODE::T8)
 t8_GPU_enable_openmp (t8code_GPU_experiments_advect)
 
 # Recurse into the "test" subdirectory. This does not actually
