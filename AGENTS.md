@@ -108,6 +108,10 @@ ctest            # each test runs as `mpirun -np 4 <exe>`
 - Verification: the results must match the original t8code `t8_advection` (`_deps/t8code-src/example/advect/`)
   for quad, hex, tet, prism, hybrid and 1D meshes with several MPI ranks (start/end volume, l_infty, L_2,
   element counts per step, `ghost_sent`, `partition_procs_sent`). The original crashes with `-s`; ours does not.
+  Exception: flow `-u 5` (`flow_around_circle`). The original reads an uninitialized vector there
+  (in practice u = 0, "max flow 0"); our copy is fixed, so the results differ.
+- Test the offloaded loop also on the host with several threads (`OMP_NUM_THREADS`). Results that change between runs
+  point to a race or to uninitialized memory.
 
 ## Known issues and gotchas
 

@@ -286,14 +286,16 @@ t8code_GPU_experiments_flow_around_circle (const t8_3D_vec &x, [[maybe_unused]] 
   t8_2D_vec polar;
   t8_2D_vec polar_speed;
   const t8_2D_vec x_2D = t8_2D_vec ({ x[0], x[1] });
-  t8_2D_vec x_out_2D ({ x_out[0], x_out[1] });
+  t8_2D_vec x_out_2D;
   const double R = 0.15;
 
+  /* Shift x so that the circle is centered at the origin.
+   * Note: The original t8code version computes the norm of x_out here, which is uninitialized.
+   * The result was undefined (in practice mostly u = 0 everywhere). */
   t8_axb (x_2D, x_out_2D, 1, -0.5);
-  /* Set the z-coordinate to zero */
-  if (t8_norm (x_out) < R) {
+  if (t8_norm (x_out_2D) < R) {
     /* Set the velocity inside the circle to 0 */
-    x_out[0] = x_out[1] = 0;
+    x_out[0] = x_out[1] = x_out[2] = 0;
     return;
   }
   /* Convert x,y coordinates to polar r,phi coordinates */
