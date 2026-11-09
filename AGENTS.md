@@ -99,6 +99,9 @@ ctest            # each test runs as `mpirun -np 4 <exe>`
   - Anything that needs t8code (neighbors, face center/normal/area, including child faces of hanging faces) is precomputed on the host in
     `compute_mesh_data` after each adapt or partition (and in `init_elements`).
   - Functions called in the loop are between `#pragma omp declare target` and `#pragma omp end declare target`.
+- **Pass pointers to the kernel as arguments, do not read them from host structs.** The kernel gets a copy of the
+  element data struct with `firstprivate (kernel_data)`. Reading `data->...` pointers from the struct in host memory
+  caused memory access faults on AMD GPUs after many adapt steps (the struct is reallocated, often at the same address).
 - **Gather, not scatter**: each element writes only its own entries, so each inner face flux is computed from both sides.
   Writing into neighbor data from the loop would cause race conditions.
 - The flow field is selected by number (`problem->flow`, `flow_eval` with a `switch`), because `problem->u` is a host
