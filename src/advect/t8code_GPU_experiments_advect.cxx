@@ -1467,18 +1467,23 @@ t8code_GPU_experiments_advect_solve (t8_cmesh_t cmesh, int flow, t8code_GPU_expe
     const double t = problem->t;
     const double delta_t = problem->delta_t;
 
+    /* The kernel gets a copy of the element data struct (array pointers only) as an argument.
+     * Thus, it does not read the pointers from the struct in host memory, which is freed and
+     * allocated again (often at the same address) in each adapt and partition. */
+    t8code_GPU_experiments_advect_element_data_t kernel_data = *data;
+
     flux_time = -sc_MPI_Wtime ();
-#pragma omp target teams distribute parallel for
+#pragma omp target teams distribute parallel for firstprivate (kernel_data)
     for (lelement = 0; lelement < num_local_elements; lelement++) {
       /* element loop */
       /* Compute the fluxes across all faces */
-      t8code_GPU_experiments_advect_compute_fluxes (data, lelement, phi, dim, flow, t);
+      t8code_GPU_experiments_advect_compute_fluxes (&kernel_data, lelement, phi, dim, flow, t);
       if (dummy_op) {
         /* simulate more load per element */
-        t8code_GPU_experiments_advect_dummy_op (data, lelement);
+        t8code_GPU_experiments_advect_dummy_op (&kernel_data, lelement);
       }
       /* Compute time step for this element */
-      t8code_GPU_experiments_advect_advance_element (data, lelement, phi, delta_t);
+      t8code_GPU_experiments_advect_advance_element (&kernel_data, lelement, phi, delta_t);
     } // end of element loop
     flux_time += sc_MPI_Wtime ();
     sc_stats_accumulate (&problem->stats[ADVECT_FLUX], flux_time);
